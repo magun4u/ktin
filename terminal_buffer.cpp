@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -37,17 +37,24 @@ int GetTerminalGlyphWidth(wchar_t ch, bool forceAmbiguousWide)
     // 3) 모호한 문자 판정
     bool isAmbiguous = false;
 
-    if (ch >= 0x2500 && ch <= 0x257F) isAmbiguous = true; // Box Drawing
-    if (ch >= 0x25A0 && ch <= 0x25FF) isAmbiguous = true; // Geometric Shapes
-    if (ch >= 0x2190 && ch <= 0x21FF) isAmbiguous = true; // Arrows
-    if (ch >= 0x2600 && ch <= 0x26FF) isAmbiguous = true;
+    // EUC-KR/CP949 기반 한국 MUD 지도에서 전각처럼 쓰이는 기호들
+    if (ch >= 0x2500 && ch <= 0x257F) isAmbiguous = true; // Box Drawing ─ │ ┌ ┐
+    if (ch >= 0x25A0 && ch <= 0x25FF) isAmbiguous = true; // Geometric Shapes ○ ● ◎
+    if (ch >= 0x2190 && ch <= 0x21FF) isAmbiguous = true; // Arrows ← ↑ → ↓
+    if (ch >= 0x2200 && ch <= 0x22FF) isAmbiguous = true; // Math Operators × ∧ ∨
+    if (ch >= 0x2460 && ch <= 0x24FF) isAmbiguous = true; // Enclosed ①②③
+    if (ch >= 0x2600 && ch <= 0x26FF) isAmbiguous = true; // Misc symbols ★☆
     if (ch >= 0x2700 && ch <= 0x27BF) isAmbiguous = true;
     if (ch >= 0x2E80 && ch <= 0xA4CF) isAmbiguous = true;
     if (ch >= 0xFE10 && ch <= 0xFE19) isAmbiguous = true;
     if (ch >= 0xFE30 && ch <= 0xFE6F) isAmbiguous = true;
+    if (ch >= 0xFF01 && ch <= 0xFF60) isAmbiguous = true; // Fullwidth ASCII
+    if (ch >= 0xFFE0 && ch <= 0xFFE6) isAmbiguous = true;
 
     if (isAmbiguous)
     {
+        // 원본 구조 유지: 강제 넓게 처리 요청 또는 옵션값에 따라 2칸으로 처리합니다.
+        // 한국어 MUD의 박스/도형/화살표 화면은 이 옵션을 켜는 쪽이 맞습니다.
         bool ambiguousWide = forceAmbiguousWide;
 
         if (!ambiguousWide)

@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -28,15 +28,15 @@ void LayoutInputEdits()
 
     const int leftPad = 8;
     const int rightPad = 8;
-    const int topPad = INPUT_SEPARATOR_HEIGHT + 6;
-    const int rowGap = 4;
+    const int topPad = INPUT_SEPARATOR_HEIGHT + 2;
+    const int rowGap = 1;
 
     int editX = leftPad;
     int editW = width - leftPad - rightPad;
     if (editW < 40) editW = 40;
 
     int rowHeight = g_app->inputLineHeight;
-    if (rowHeight < 20) rowHeight = 20;
+    if (rowHeight < 18) rowHeight = 18;
 
     for (int i = 0; i < INPUT_ROWS; ++i)
     {
@@ -68,8 +68,8 @@ void RecalcInputMetrics()
     ReleaseDC(g_app->hwndInput, hdc);
 
     g_app->inputLineHeight = tm.tmHeight + tm.tmExternalLeading;
-    if (g_app->inputLineHeight < 18)
-        g_app->inputLineHeight = 18;
+    if (g_app->inputLineHeight < 17)
+        g_app->inputLineHeight = 17;
 
     g_app->inputTextOffsetX = 0;
     g_app->inputTextOffsetY = 0;
@@ -82,12 +82,12 @@ int GetInputAreaHeight()
 {
     if (!g_app) return 90;
 
-    const int topPadding = INPUT_SEPARATOR_HEIGHT + 6;
-    const int bottomPadding = 6;
-    const int rowGap = 4;
+    const int topPadding = INPUT_SEPARATOR_HEIGHT + 2;
+    const int bottomPadding = 2;
+    const int rowGap = 1;
 
     int rowHeight = g_app->inputLineHeight;
-    if (rowHeight < 20) rowHeight = 20;
+    if (rowHeight < 18) rowHeight = 18;
 
     return topPadding + bottomPadding +
            (rowHeight * INPUT_ROWS) + (rowGap * (INPUT_ROWS - 1));
@@ -244,7 +244,7 @@ void RecreateInputCaret(HWND hwnd)
     ShowCaret(hwnd);
 }
 
-static int GetInputRowY(int row)
+int GetInputRowY(int row)
 {
     return INPUT_SEPARATOR_HEIGHT + row * g_app->inputLineHeight;
 }

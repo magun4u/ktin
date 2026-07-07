@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -9,6 +9,7 @@
 #include "memo.h"
 #include "shortcut_bar.h"
 #include "resource.h"
+#include "auto_login.h"
 #include "settings.h"
 #include <commctrl.h>
 #include <shellapi.h>
@@ -294,13 +295,8 @@ static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 g_app->quickConnectHistory.insert(g_app->quickConnectHistory.begin(), { addr, charset });
                 SaveQuickConnectHistory();
 
-                // 빠른 연결은 전역 자동 로그인 설정 사용
-                g_app->activeAutoLoginEnabled = g_app->autoLoginEnabled;
-                g_app->activeAutoLoginIdPattern = g_app->autoLoginIdPattern;
-                g_app->activeAutoLoginId = g_app->autoLoginId;
-                g_app->activeAutoLoginPwPattern = g_app->autoLoginPwPattern;
-                g_app->activeAutoLoginPw = g_app->autoLoginPw;
-                g_app->autoLoginState = 0;
+                // 빠른 연결은 전역 자동 로그인 설정을 접속 후 60초 동안만 검사합니다.
+                StartAutoLoginWindowFromGlobal();
 
                 // 빠른 연결은 주소록 세션이 아니므로 activeSession은 비움
                 g_app->hasActiveSession = false;
@@ -316,20 +312,7 @@ static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 // #session new 로 전송
                 SendRawCommandToMud(L"#session new " + addr);
 
-                // 자동 로그인 시작은 "자동 로그인 사용 중일 때만"
-                if (g_app->activeAutoLoginEnabled)
-                {
-                    g_app->autoLoginStartTick = GetTickCount();
-                    g_app->autoLoginWindowActive = true;
-                    g_app->autoLoginState = 0;
-                    g_app->autoLoginTriggered = false;
-                }
-                else
-                {
-                    g_app->autoLoginWindowActive = false;
-                    g_app->autoLoginState = 0;
-                    g_app->autoLoginTriggered = false;
-                }
+                // StartAutoLoginWindowFromGlobal()에서 이미 초기화했습니다.
             }
 
             DestroyWindow(hwnd);

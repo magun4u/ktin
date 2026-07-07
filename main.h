@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "constants.h"
 #include "types.h"
@@ -65,7 +65,6 @@ struct AppState
 
     ProcessHandles proc;
     std::thread readerThread;
-    std::atomic<bool> readerRunning = false;
     std::atomic<bool> shuttingDown = false;
 
     std::wstring lastConnectCommand;
@@ -103,7 +102,13 @@ struct AppState
 
     int screenCols = 80;
     int screenRows = 32;
-    int termAlign = 0; // ★ 신규 추가: 0=왼쪽, 1=중앙, 2=오른쪽 (기본 중앙)
+    int termAlign = 0; // 0=왼쪽, 1=중앙, 2=오른쪽
+    int termMarginLeft = 0;
+    int termMarginRight = 0;
+    int termMarginTop = 0;
+    int termMarginBottom = 0;
+    bool mainAlwaysOnTop = false;
+    bool tailSnapEnabled = true;
 
     HMENU hMainMenu = nullptr;
     bool menuHidden = false;
@@ -140,6 +145,12 @@ struct AppState
     std::wstring autoLoginId = L"";
     std::wstring autoLoginPwPattern = L"비밀번호:";
     std::wstring autoLoginPw = L"";
+    std::wstring autoLoginSuccessPattern1 = L"";
+    std::wstring autoLoginSuccessPattern2 = L"";
+    std::wstring autoLoginSuccessPattern3 = L"";
+    std::wstring autoLoginFailPattern1 = L"";
+    std::wstring autoLoginFailPattern2 = L"";
+    std::wstring autoLoginFailPattern3 = L"";
 
     // ★ 신규 추가: '지금 연결할 때' 실제로 쓸 자동 로그인 정보 (전역 or 주소록)
     bool activeAutoLoginEnabled = false;
@@ -195,7 +206,7 @@ struct AppState
     bool g_charsetDetected = false;
     int  g_detectCharsetRetry = 0;
 
-    bool ambiguousEastAsianWide = false;
+    bool ambiguousEastAsianWide = true;
 
     std::vector<TimerItem> timers;
 
@@ -203,6 +214,9 @@ struct AppState
 
     DWORD autoLoginStartTick = 0;
     bool autoLoginWindowActive = false;
+    DWORD keepAliveBlockedUntilTick = 0;
+    DWORD lastConnectionSuccessTick = 0;
+    DWORD lastConnectionDownTick = 0;
 
     bool autoLoginTriggered = false;
 };

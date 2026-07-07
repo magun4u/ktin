@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <windows.h>
 #include <vector>
 #include <string>
@@ -22,8 +22,10 @@ void LoadCaptureLogSettings();
 void SaveCaptureLogSettings();
 void StartCaptureLog();
 void StopCaptureLog();
+void FlushCaptureLogBuffer();
 
 void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs);
+void WriteRawAnsiBytesToCaptureLog(const char* data, size_t len);
 void WriteToChatLog(const std::wstring& text);
 
 LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

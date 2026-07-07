@@ -1,4 +1,8 @@
-#pragma once
+﻿#pragma once
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 
 // 1. 공통 Windows & C++ 헤더
 #include <windows.h>
@@ -24,6 +28,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+using std::min;
+using std::max;
 
 // 2. 기본 상수 및 ConPTY 매크로
 #define INPUT_ROWS                  3
@@ -294,6 +301,19 @@ static const int ID_SET_EDIT_AL_ID = 5111;
 static const int ID_SET_EDIT_AL_PW_PAT = 5112;
 static const int ID_SET_EDIT_AL_PW = 5113;
 static const int ID_SET_CHK_USE_MUD_FONT = 5114;
+static const int ID_SET_EDIT_AL_SUCCESS1 = 5115;
+static const int ID_SET_EDIT_AL_SUCCESS2 = 5116;
+static const int ID_SET_EDIT_AL_SUCCESS3 = 5117;
+static const int ID_SET_EDIT_AL_FAIL1 = 5118;
+static const int ID_SET_EDIT_AL_FAIL2 = 5119;
+static const int ID_SET_EDIT_AL_FAIL3 = 5120;
+static const int ID_SET_MARGIN_LEFT = 5121;
+static const int ID_SET_MARGIN_RIGHT = 5122;
+static const int ID_SET_MARGIN_TOP = 5123;
+static const int ID_SET_MARGIN_BOTTOM = 5124;
+static const int ID_SET_CHK_MAIN_TOPMOST = 5125;
+static const int ID_SET_CHK_TAIL_SNAP = 5126;
+
 
 static const int ID_SET_BTN_LOG_FONT = 5201;
 static const int ID_SET_BTN_LOG_COLOR = 5202;
@@ -447,3 +467,61 @@ static const int ID_ABBR_GLOBAL_ENABLE = 9508;
 #define IDC_STATUS_APPLY       30003
 #define IDC_STATUS_EDIT_BASE   30010
 #define IDC_STATUS_ALIGN_BASE  30020
+// --- 안전 갈무리 / Tail 보기 메뉴 ID ---
+static const int ID_MENU_CAPTURE_TOGGLE          = 13200;
+static const int ID_MENU_CAPTURE_OPEN_FOLDER     = 13201;
+static const int ID_MENU_CAPTURE_CLOSE_ALL       = 13202;
+static const int ID_MENU_CAPTURE_TAIL_ALL        = 13210;
+static const int ID_MENU_CAPTURE_TAIL_CHAT       = 13211;
+static const int ID_MENU_CAPTURE_TAIL_AUCTION    = 13212;
+static const int ID_MENU_CAPTURE_TAIL_ITEM       = 13213;
+static const int ID_MENU_CAPTURE_TAIL_CUSTOM     = 13214;
+static const int ID_MENU_CAPTURE_FILTER_SETTINGS = 13215;
+static const int ID_MENU_CAPTURE_TAIL_TALK       = 13216;
+static const int ID_MENU_CAPTURE_TAIL_EXP        = 13217;
+static const int ID_MENU_CAPTURE_TAIL_USER1      = 13218;
+static const int ID_MENU_CAPTURE_TAIL_USER2      = 13219;
+static const int ID_MENU_CAPTURE_TAIL_USER3      = 13220;
+static const int ID_TIMER_TAIL_REFRESH           = 13240;
+static const int ID_TAIL_EDIT                    = 13221;
+static const int ID_TAIL_STATUS                  = 13222;
+static const int ID_TAIL_PATTERN_EDIT            = 13223;
+static const int ID_TAIL_PATTERN_OK              = 13224;
+static const int ID_TAIL_PATTERN_CANCEL          = 13225;
+static const int ID_TAIL_FILTER_CHAT             = 13226;
+static const int ID_TAIL_FILTER_AUCTION          = 13227;
+static const int ID_TAIL_FILTER_ITEM             = 13228;
+static const int ID_TAIL_FILTER_TALK             = 13229;
+static const int ID_TAIL_FILTER_EXP              = 13233;
+static const int ID_TAIL_FILTER_USER1_NAME       = 13234;
+static const int ID_TAIL_FILTER_USER1_PATTERN    = 13235;
+static const int ID_TAIL_FILTER_USER2_NAME       = 13236;
+static const int ID_TAIL_FILTER_USER2_PATTERN    = 13237;
+static const int ID_TAIL_FILTER_USER3_NAME       = 13238;
+static const int ID_TAIL_FILTER_USER3_PATTERN    = 13239;
+static const int ID_TAIL_FILTER_OK               = 13250;
+static const int ID_TAIL_FILTER_CANCEL           = 13251;
+static const int ID_TAIL_FILTER_RESET            = 13252;
+static const int ID_TAIL_FILTER_ANSI_ALL         = 13253;
+static const int ID_TAIL_FILTER_ANSI_CHAT        = 13254;
+static const int ID_TAIL_FILTER_ANSI_AUCTION     = 13255;
+static const int ID_TAIL_FILTER_ANSI_TALK        = 13256;
+static const int ID_TAIL_FILTER_ANSI_ITEM        = 13257;
+static const int ID_TAIL_FILTER_ANSI_EXP         = 13258;
+static const int ID_TAIL_FILTER_ANSI_USER1       = 13259;
+static const int ID_TAIL_FILTER_ANSI_USER2       = 13272;
+static const int ID_TAIL_FILTER_ANSI_USER3       = 13273;
+// --- Tail window internal command IDs (buildfix22) ---
+static const int ID_TAIL_TABCTRL                 = 13260;
+static const int ID_TAIL_MENU_TAB_SETTINGS       = 13261;
+static const int ID_TAIL_MENU_HIDE_MENU          = 13262;
+static const int ID_TAIL_MENU_SHOW_MENU          = 13263;
+static const int ID_TAIL_MENU_COPY               = 13264;
+static const int ID_TAIL_MENU_SELECT_ALL         = 13265;
+static const int ID_TAIL_MENU_CLOSE              = 13266;
+static const int ID_TAIL_MENU_TOGGLE_STATUS      = 13267;
+static const int ID_TAIL_MENU_TOPMOST            = 13270;
+static const int ID_TAIL_TAB_SET_OK              = 13268;
+static const int ID_TAIL_TAB_SET_CANCEL          = 13269;
+static const int ID_TAIL_TAB_CHECK_BASE          = 13300;
+

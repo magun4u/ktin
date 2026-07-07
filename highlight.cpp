@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -19,81 +19,13 @@ HighlightState g_hiState;
 // 내부 헬퍼 함수 (static)
 // ==============================================
 std::wstring ExpandHighlightCaptures(const std::wstring& src, const std::vector<std::wstring>& caps);
-bool MatchHighlightPattern(const std::wstring& pattern, const std::wstring& text, std::vector<std::wstring>& caps);
-
-void ExecuteHighlightRuleAction(const HighlightRule& rule, const std::vector<std::wstring>& caps)
-{
-    if (rule.useBeep)
-        MessageBeep(MB_OK);
-
-    if (rule.useSound && !rule.soundPath.empty())
-    {
-        std::wstring path = ExpandHighlightCaptures(rule.soundPath, caps);
-        PlayAudioFile(path);
-    }
-
-    if (rule.actionType > 0 && !rule.command.empty())
-    {
-        std::wstring cmd = ExpandHighlightCaptures(rule.command, caps);
-        cmd.erase(0, cmd.find_first_not_of(L" \t"));
-        if (cmd.empty()) return;
-
-        // 내부 명령 처리 (@SET, @ADD, @INC 등)
-        if (_wcsnicmp(cmd.c_str(), L"@SET ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@ADD ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@SUB ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@MUL ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@DIV ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@INC ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@DEC ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@DEL ", 5) == 0 ||
-            _wcsnicmp(cmd.c_str(), L"@TOGGLE ", 8) == 0)
-        {
-            // 변수 관련 내부 명령 처리 로직 (사용자 제공 코드 그대로 유지)
-            // ... (ExecuteHighlightRuleAction 내부의 변수 처리 부분 전체 복사)
-            // @SET, @ADD, @SUB, @MUL, @DIV, @INC, @DEC, @DEL, @TOGGLE 처리
-        }
-        else
-        {
-            // 내부 명령이 아니면 MUD로 직접 전송
-            SendRawCommandToMud(cmd);
-        }
-    }
-}
-
-// 패턴 매칭 ( %1 ~ %9 → (.*?) 정규식 변환 )
 bool MatchHighlightPattern(const std::wstring& pattern, const std::wstring& text, std::vector<std::wstring>& caps)
 {
-    if (pattern.empty() || text.empty()) return false;
-
-    try
-    {
-        std::wstring regExStr = pattern;
-        for (int i = 1; i <= 9; ++i)
-        {
-            wchar_t target[4];
-            wsprintfW(target, L"%%%d", i);
-            size_t pos = 0;
-            while ((pos = regExStr.find(target, pos)) != std::wstring::npos)
-            {
-                regExStr.replace(pos, 2, L"(.*?)");
-                pos += 5;
-            }
-        }
-
-        std::wregex re(regExStr, std::regex_constants::icase);
-        std::wsmatch m;
-        if (std::regex_search(text, m, re))
-        {
-            caps.clear();
-            for (size_t i = 0; i < m.size(); ++i)
-                caps.push_back(m[i].str());
-            return true;
-        }
-    }
-    catch (...) {}
+    // 안전판: 화면 렌더링/수신 처리 중 실시간 정규식 매칭은 하지 않습니다.
+    (void)pattern; (void)text; caps.clear();
     return false;
 }
+
 
 std::wstring ExpandHighlightCaptures(const std::wstring& src, const std::vector<std::wstring>& caps)
 {

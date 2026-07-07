@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -8,9 +8,11 @@
 #include "settings.h"
 #include <regex>
 #include <shellapi.h>
+#include <mutex>
 
 static std::string g_capturePendingUtf8;
 static DWORD g_captureLastFlushTick = 0;
+static std::mutex g_captureLogMutex;
 
 ChatCaptureItem g_chatCaptures[10];
 
@@ -33,21 +35,10 @@ std::wstring MakeCaptureLogTimestamp()
 // ==============================================
 void AppendChatWindowText(const std::wstring& text)
 {
-    if (!g_app || !g_app->hwndChat) return;
-
-    // 커서를 맨 끝으로 이동
-    CHARRANGE cr = { -1, -1 };
-    SendMessageW(g_app->hwndChat, EM_EXSETSEL, 0, (LPARAM)&cr);
-
-    // 빈 창이면 줄바꿈 없이, 내용이 있으면 앞에 \r\n 추가
-    int len = GetWindowTextLengthW(g_app->hwndChat);
-    std::wstring output = (len > 0) ? (L"\r\n" + text) : text;
-
-    SendMessageW(g_app->hwndChat, EM_REPLACESEL, FALSE, (LPARAM)output.c_str());
-
-    // 강제 스크롤
-    SendMessageW(g_app->hwndChat, WM_VSCROLL, SB_BOTTOM, 0);
+    // 안전판: RichEdit 채팅 캡처창은 장시간 실행 시 누적 부하가 커질 수 있어 제거합니다.
+    (void)text;
 }
+
 
 void RunChatCaptureEngine(const std::wstring& cleanLine)
 {
@@ -209,6 +200,8 @@ void FlushCaptureLogBuffer()
     if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE)
         return;
 
+    std::lock_guard<std::mutex> lock(g_captureLogMutex);
+
     if (g_capturePendingUtf8.empty())
         return;
 
@@ -239,6 +232,37 @@ void StopCaptureLog()
     g_app->captureLogPath.clear();
 }
 
+
+void WriteRawAnsiBytesToCaptureLog(const char* data, size_t len)
+{
+    if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE || !data || len == 0)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_captureLogMutex);
+    g_capturePendingUtf8.append(data, data + len);
+
+    const size_t kFlushSize = 32 * 1024;
+    const DWORD kFlushMs = 500;
+    DWORD now = GetTickCount();
+    bool needFlush = false;
+
+    if (g_capturePendingUtf8.size() >= kFlushSize)
+        needFlush = true;
+    if (g_captureLastFlushTick == 0)
+        g_captureLastFlushTick = now;
+    if (now - g_captureLastFlushTick >= kFlushMs)
+        needFlush = true;
+
+    if (!needFlush)
+        return;
+
+    DWORD written = 0;
+    WriteFile(g_app->hCaptureLogFile, g_capturePendingUtf8.data(),
+        (DWORD)g_capturePendingUtf8.size(), &written, nullptr);
+    g_capturePendingUtf8.clear();
+    g_captureLastFlushTick = now;
+}
+
 void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs)
 {
     if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE)
@@ -257,6 +281,7 @@ void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs)
     if (utf8.empty())
         return;
 
+    std::lock_guard<std::mutex> lock(g_captureLogMutex);
     g_capturePendingUtf8 += utf8;
 
     const size_t kFlushSize = 32 * 1024;

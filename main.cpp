@@ -1,5 +1,5 @@
-// ==============================================
-// main.cpp
+﻿// ==============================================
+// main.cpp 20260420
 // ==============================================
 #include "constants.h"
 #include "types.h"
@@ -18,6 +18,7 @@
 #include "numpad.h"
 #include "chat_capture.h"
 #include "shortcut_bar.h"
+#include "status_bar.h"
 #include "help_dialog.h"
 #include "memo.h"
 #include "dialogs.h"
@@ -25,6 +26,7 @@
 #include "input.h"
 #include "timer.h"
 #include "address_book.h"
+#include "log_tail.h"
 // 3. 리소스 헤더
 #include "resource.h"
 
@@ -68,8 +70,7 @@
 // ==============================================
 // 전역 변수
 // ==============================================
-AppState appInstance;
-AppState* g_app = &appInstance;
+AppState* g_app = nullptr;
 HMODULE g_hRichEdit = nullptr;
 
 // 누락된 창 이름 변수들
@@ -136,26 +137,18 @@ void LayoutChildren(HWND hwnd) {
     int width = rc.right - rc.left, height = rc.bottom - rc.top;
     if (width <= 0 || height <= 0) return;
     int menuHeight = (!g_app->menuHidden) ? g_app->customMenuHeight : 0;
+
     int chatHeight = 0, chatSeparatorHeight = 0;
-    bool chatDockedVisible = (g_app->chatDocked && g_app->chatVisible && g_app->hwndChat && IsWindow(g_app->hwndChat));
-    if (chatDockedVisible) {
-        int chatFontCy = 16; HDC hdc = GetDC(hwnd);
-        HFONT oldFont = (HFONT)SelectObject(hdc, g_app->hFontChat ? g_app->hFontChat : GetStockObject(DEFAULT_GUI_FONT));
-        TEXTMETRICW tm = {}; GetTextMetricsW(hdc, &tm); chatFontCy = tm.tmHeight + tm.tmExternalLeading;
-        SelectObject(hdc, oldFont); ReleaseDC(hwnd, hdc);
-        chatHeight = max(24, (g_app->chatDockedLines * chatFontCy) + 24);
-        chatSeparatorHeight = INPUT_SEPARATOR_HEIGHT;
-    }
-    int inputHeight = max(72, GetInputAreaHeight());
+
+    int inputHeight = max(58, GetInputAreaHeight());
     int shortcutHeight = g_app->shortcutBarVisible ? SHORTCUT_BAR_HEIGHT : 0;
     int statusHeight = GetStatusBarHeight();
     int logHeight = max(80, height - menuHeight - shortcutHeight - inputHeight - statusHeight - chatHeight - chatSeparatorHeight);
-    int chatTop = menuHeight, logTop = chatTop + chatHeight + chatSeparatorHeight;
+    int logTop = menuHeight;
     int shortcutTop = logTop + logHeight, inputTop = shortcutTop + shortcutHeight, statusTop = inputTop + inputHeight;
 
     HDWP hdwp = BeginDeferWindowPos(5);
-    if (chatDockedVisible) { ShowWindow(g_app->hwndChat, SW_SHOW); hdwp = DeferWindowPos(hdwp, g_app->hwndChat, HWND_TOP, 0, chatTop, width, chatHeight, SWP_NOACTIVATE | SWP_FRAMECHANGED); }
-    else if (g_app->hwndChat && IsWindow(g_app->hwndChat) && g_app->chatDocked) hdwp = DeferWindowPos(hdwp, g_app->hwndChat, nullptr, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+
     if (g_app->hwndLog && IsWindow(g_app->hwndLog)) hdwp = DeferWindowPos(hdwp, g_app->hwndLog, nullptr, 0, logTop, width, logHeight, SWP_NOZORDER | SWP_NOACTIVATE);
     if (g_app->hwndShortcutBar && IsWindow(g_app->hwndShortcutBar)) hdwp = DeferWindowPos(hdwp, g_app->hwndShortcutBar, nullptr, 0, shortcutTop, width, shortcutHeight > 0 ? shortcutHeight : 0, SWP_NOZORDER | SWP_NOACTIVATE | (g_app->shortcutBarVisible && shortcutHeight > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
     if (g_app->hwndInput && IsWindow(g_app->hwndInput)) hdwp = DeferWindowPos(hdwp, g_app->hwndInput, nullptr, 0, inputTop, width, inputHeight, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -178,8 +171,8 @@ void LayoutChildren(HWND hwnd) {
         for (int i = 0; i < SHORTCUT_BUTTON_COUNT; ++i) if (g_app->hwndShortcutButtons[i]) ShowWindow(g_app->hwndShortcutButtons[i], SW_HIDE);
     }
     LayoutInputEdits();
-    if (chatDockedVisible) { SendMessageW(g_app->hwndChat, EM_SETBKGNDCOLOR, 0, g_app->chatStyle.backColor); InvalidateRect(g_app->hwndChat, nullptr, TRUE); UpdateWindow(g_app->hwndChat); }
-    InvalidateRect(hwnd, nullptr, TRUE);
+
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // ==============================================
@@ -194,7 +187,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     LoadLibraryW(L"Msftedit.dll");
 
-    AppState app;
+    static AppState app;
     g_app = &app;
 
     // 창 클래스 등록
@@ -246,14 +239,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     wcStatus.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     wcStatus.hbrBackground = nullptr;
     RegisterClassW(&wcStatus);
-
-    WNDCLASSW wcChatFloat = {};
-    wcChatFloat.lpfnWndProc   = ChatFloatWndProc;
-    wcChatFloat.hInstance     = hInstance;
-    wcChatFloat.lpszClassName = L"TTGuiChatFloatClass";
-    wcChatFloat.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wcChatFloat.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    RegisterClassW(&wcChatFloat);
 
     HWND hwnd = CreateWindowExW(
         0, kMainWindowClass, L"TinTin++ GUI",
@@ -642,47 +627,67 @@ static void ShowHighlightDialog(HWND owner) {
     EnableWindow(owner, TRUE); SetActiveWindow(owner);
 }
 
-static void ShowCustomMenuPopup(HWND hwnd, int menuIndex)
+
+
+// ==============================================
+// 전역 메뉴 단축키 처리
+// 메뉴 항목의 "\tAlt+Q" 같은 표시는 화면 표시일 뿐 실제 단축키가 아니므로
+// 입력창/터미널이 포커스를 가진 상태에서도 여기서 직접 처리한다.
+// ==============================================
+static bool HandleGlobalMenuShortcut(HWND hwnd, UINT msg, WPARAM wParam)
 {
-    if (!g_app || !g_app->hMainMenu || menuIndex < 0)
-        return;
+    if (!g_app)
+        return false;
 
-    // ★ 신규 추가: 메뉴가 화면에 그려지기 직전에 무조건 글씨를 최신 상태로 갱신합니다!
-    UpdateMenuToggleStates();
+    bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+    bool alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
 
-    HMENU hPopup = GetSubMenu(g_app->hMainMenu, menuIndex);
-    if (!hPopup)
-        return;
+    HWND target = g_app->hwndMain ? g_app->hwndMain : hwnd;
 
-    int x = 6;
-    for (int i = 0; i < menuIndex; ++i)
-        x += GetCustomMenuItemWidth(i) + 4;
+    if (msg == WM_SYSKEYDOWN && alt && !ctrl && !shift)
+    {
+        switch ((int)wParam)
+        {
+        case 'Q':
+            SendMessageW(target, WM_COMMAND, ID_MENU_FILE_QUICK_CONNECT, 0);
+            return true;
+        case 'A':
+            SendMessageW(target, WM_COMMAND, ID_MENU_FILE_ADDRESSBOOK, 0);
+            return true;
+        case 'V':
+            SendMessageW(target, WM_COMMAND, ID_MENU_EDIT_MEMO, 0);
+            return true;
+        case 'X':
+            SendMessageW(target, WM_COMMAND, ID_MENU_EXIT, 0);
+            return true;
+        case 'S':
+            SendMessageW(target, WM_COMMAND, ID_MENU_FILE_READ_SCRIPT, 0);
+            return true;
+        }
+    }
 
-    int y = g_app->customMenuHeight;
+    if (msg == WM_KEYDOWN && ctrl && !alt && !shift)
+    {
+        if (wParam == 'F')
+        {
+            SendMessageW(target, WM_COMMAND, ID_MENU_FIND_DIALOG, 0);
+            return true;
+        }
+        if (wParam == VK_F9)
+        {
+            SendMessageW(target, WM_COMMAND, ID_MENU_FILE_ZAP, 0);
+            return true;
+        }
+    }
 
-    POINT pt = { x, y };
-    ClientToScreen(hwnd, &pt);
+    if (msg == WM_KEYDOWN && !ctrl && !alt && !shift && wParam == VK_F4)
+    {
+        SendMessageW(target, WM_COMMAND, ID_MENU_VIEW_SYMBOLS, 0);
+        return true;
+    }
 
-    g_app->hotMenuIndex = menuIndex;
-    InvalidateRect(hwnd, nullptr, FALSE);
-    UpdateWindow(hwnd);
-
-    SetForegroundWindow(hwnd);
-
-    TrackPopupMenu(
-        hPopup,
-        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
-        pt.x,
-        pt.y,
-        0,
-        hwnd,
-        nullptr);
-
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-
-    g_app->hotMenuIndex = -1;
-    InvalidateRect(hwnd, nullptr, FALSE);
-    UpdateWindow(hwnd);
+    return false;
 }
 
 // ==============================================
@@ -706,7 +711,7 @@ static void ReaderThreadProc(HWND hwndMain, HANDLE hRead)
             // 강제 flush가 아니면 너무 자주 PostMessage 하지 않음
             if (!force)
             {
-                if (now - lastPostTick < 30)
+                if (now - lastPostTick < 50)
                     return;
             }
 
@@ -725,22 +730,27 @@ static void ReaderThreadProc(HWND hwndMain, HANDLE hRead)
         if (!ok || read == 0)
             break;
 
-        // ★ 원본 ANSI/UTF-8 바이트 그대로 저장
-        if (g_app && read > 0)
+        // 원본 ANSI/UTF-8 바이트 보관 및 갈무리 저장.
+        // buildfix25: 갈무리 로그는 ANSI 원문으로 저장하고,
+        // Tail 보기에서 필요할 때 ANSI 제거/색상 적용을 선택한다.
+        if (g_app && read > 0 && (g_app->captureLogEnabled || g_app->chatCaptureEnabled))
         {
+            if (g_app->captureLogEnabled && g_app->hCaptureLogFile != INVALID_HANDLE_VALUE)
+                WriteRawAnsiBytesToCaptureLog(buffer, read);
+
             g_app->rawAnsiCurrentScreen.append(buffer, buffer + read);
             g_app->rawAnsiHistory.append(buffer, buffer + read);
-
+        
             const size_t kMaxCur = 256 * 1024;
             const size_t kMaxHist = 2 * 1024 * 1024;
-
+        
             if (g_app->rawAnsiCurrentScreen.size() > kMaxCur)
             {
                 g_app->rawAnsiCurrentScreen.erase(
                     0,
                     g_app->rawAnsiCurrentScreen.size() - kMaxCur);
             }
-
+        
             if (g_app->rawAnsiHistory.size() > kMaxHist)
             {
                 g_app->rawAnsiHistory.erase(
@@ -758,15 +768,14 @@ static void ReaderThreadProc(HWND hwndMain, HANDLE hRead)
                 std::make_move_iterator(runs.begin()),
                 std::make_move_iterator(runs.end()));
 
-            // 너무 커지면 강제로 바로 보냄
-            if (pendingRuns.size() >= 512)
-            {
-                FlushPendingRuns(true);
-            }
-            else
-            {
-                FlushPendingRuns(false);
-            }
+            // 안전판 수정(buildfix9):
+            // 기존에는 50ms 안에 들어온 작은 출력은 pendingRuns에 보관만 하고
+            // 다음 데이터가 오지 않으면 WM_APP_LOG_CHUNK가 올라가지 않아
+            // 마지막 화면(예: 지도 아래 프롬프트)이 termBuffer에는 들어왔는데
+            // 실제 창은 다시 그려지지 않는 경우가 있었다.
+            // WM_APP_LOG_CHUNK 쪽에서 30ms 타이머로 실제 렌더링을 합치므로,
+            // 여기서는 매번 flush해서 마지막 조각도 반드시 화면 갱신 신호를 보낸다.
+            FlushPendingRuns(true);
         }
     }
 
@@ -785,10 +794,19 @@ static void ReaderThreadProc(HWND hwndMain, HANDLE hRead)
     PostMessageW(hwndMain, WM_APP_PROCESS_EXIT, 0, 0);
 }
 
+static RECT s_lastMainWindowRect = {};
+static bool s_hasLastMainWindowRect = false;
+
 static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN:
+        if (HandleGlobalMenuShortcut(hwnd, msg, wParam))
+            return 0;
+        break;
+
     case WM_INITMENUPOPUP:
     {
         if (g_app && g_app->termBuffer) {
@@ -796,30 +814,12 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             UINT state = hasHistory ? MF_ENABLED : MF_GRAYED;
             EnableMenuItem((HMENU)wParam, ID_MENU_EDIT_COPY_PAST, MF_BYCOMMAND | state);
             EnableMenuItem((HMENU)wParam, ID_MENU_EDIT_SAVE_PAST, MF_BYCOMMAND | state);
+            ModifyMenuW((HMENU)wParam, ID_MENU_CAPTURE_TOGGLE, MF_BYCOMMAND | MF_STRING,
+                ID_MENU_CAPTURE_TOGGLE,
+                g_app->captureLogEnabled ? L"갈무리 켜짐" : L"갈무리 꺼짐");
+            CheckMenuItem((HMENU)wParam, ID_MENU_CAPTURE_TOGGLE, MF_BYCOMMAND | (g_app->captureLogEnabled ? MF_CHECKED : MF_UNCHECKED));
         }
         return 0;
-    }
-
-    case WM_MEASUREITEM:
-    {
-        MEASUREITEMSTRUCT* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
-        if (mis && mis->CtlType == ODT_MENU)
-        {
-            MeasureOwnerDrawMenuItem(hwnd, mis);
-            return TRUE;
-        }
-        break;
-    }
-
-    case WM_DRAWITEM:
-    {
-        DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (dis && dis->CtlType == ODT_MENU)
-        {
-            DrawOwnerDrawMenuItem(dis);
-            return TRUE;
-        }
-        break;
     }
 
     case WM_CREATE:
@@ -838,19 +838,31 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         LoadAddressBook();
         LoadQuickConnectHistory();
         LoadHighlightSettings();
+
+        // 안전판: 장시간 실행 먹통의 주 원인이 되는 실시간 트리거/채팅 캡처/자동 갈무리는 기본 비활성화합니다.
+        // 찾기, 지난/현재 화면 복사/저장, 주소록, 자동 로그인, 단축키, 메모장 등은 유지합니다.
+        g_hiState.active = false;
+        g_hiState.rules.clear();
+        g_app->chatCaptureEnabled = false;
+        g_app->chatVisible = false;
+        // 전체 수신 갈무리는 화면 캡처/정규식 기능이 아니므로 사용자 설정을 유지합니다.
+        g_app->chatTimestampEnabled = false;
+
+        // 자동 로그인은 실제 접속 명령(#session/#ses/#connect, 빠른연결, 주소록 연결)이
+        // 발생했을 때만 60초 동안 검사합니다.
+        // 프로그램 시작 직후에는 아직 서버 세션이 없을 수 있으므로 여기서 자동 로그인 창을
+        // 열지 않습니다. 그렇지 않으면 60초 뒤 접속유지가 로그인 전/미접속 상태에서
+        // 실행될 수 있습니다.
         LoadAutoLoginSettings();
         LoadVariableSettings();
         LoadNumpadSettings();
         LoadGeneralSettings();
+        LoadShortcutSettings();
         LoadAbbreviationSettings();
         LoadTimerSettings();
 
         // ★ 여기서 LoadWindowSettings를 호출하여 파일 상태를 완벽히 가져옴
         LoadWindowSettings(hwnd);
-
-
-        // 2. 엔진을 돌리기 위한 Win32 타이머 생성 (50ms 주기)
-        SetTimer(hwnd, ID_TIMER_USER_ENGINE, 50, nullptr); // <--- 타이머 추가
 
         // 1. 로그창 스타일 설정 (함수 호출 한 줄로 끝!)
         InitStyleFont(g_app->logStyle.font, hwnd, 12);
@@ -872,33 +884,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         g_app->termBuffer = new TerminalBuffer(g_app->screenCols, initialLogRows);
 
-        // ★ 채팅 캡쳐창 본체 생성
-        g_app->hwndChat = CreateWindowExW(
-            0, MSFTEDIT_CLASS, L"",
-            WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-        SendMessageW(g_app->hwndChat, EM_SETBKGNDCOLOR, 0, g_app->chatStyle.backColor);
-        SetupChatRichEditDefaults(g_app->hwndChat);
-
-        // ★ 추가됨: 방금 만든 우클릭 메뉴용 함수를 채팅 캡쳐창에 연결해줍니다!
-        g_app->oldChatProc = (WNDPROC)SetWindowLongPtrW(g_app->hwndChat, GWLP_WNDPROC, (LONG_PTR)ChatEditSubclassProc);
-
-        // ★ 분리했을 때 담아줄 전용 창틀 생성 (여기에 제목을 답니다!)
-        g_app->hwndChatFloat = CreateWindowExW(
-            WS_EX_TOOLWINDOW, L"TTGuiChatFloatClass", L"채팅 캡쳐창",
-            WS_OVERLAPPEDWINDOW,
-            g_app->chatFloatRect.left, g_app->chatFloatRect.top,
-            g_app->chatFloatRect.right - g_app->chatFloatRect.left,
-            g_app->chatFloatRect.bottom - g_app->chatFloatRect.top,
-            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-        // 분리 설정 상태면 부모를 창틀로 이동
-        if (!g_app->chatDocked) {
-            SetParent(g_app->hwndChat, g_app->hwndChatFloat);
-            if (g_app->chatVisible) ShowWindow(g_app->hwndChatFloat, SW_SHOW);
-        }
-
         g_app->hwndLog = CreateWindowExW(0, kTerminalWindowClass, L"", WS_CHILD | WS_VISIBLE, 0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
         g_app->hwndInput = CreateWindowExW(0, kInputContainerClass, L"", WS_CHILD | WS_VISIBLE, 0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -919,46 +904,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         CreateMainMenu(hwnd);
 
-        InitShortcutBindings();
-        LoadFunctionKeySettings();
-
-        // 설정 먼저 읽기
-        LoadShortcutSettings();
-
-        // 버튼 실제 생성
-        InitializeShortcutButtons();
-
-        // 생성된 뒤에 스타일 적용
-        for (int i = 0; i < SHORTCUT_BUTTON_COUNT; ++i)
-        {
-            if (!g_app->hwndShortcutButtons[i])
-                continue;
-
-            LONG_PTR style = GetWindowLongPtrW(g_app->hwndShortcutButtons[i], GWL_STYLE);
-
-            if (g_app->shortcutIsToggle[i])
-            {
-                style &= ~BS_PUSHBUTTON;
-                style |= (BS_AUTOCHECKBOX | BS_PUSHLIKE);
-            }
-            else
-            {
-                style &= ~(BS_AUTOCHECKBOX | BS_CHECKBOX | BS_PUSHLIKE);
-                style |= BS_PUSHBUTTON;
-            }
-
-            SetWindowLongPtrW(g_app->hwndShortcutButtons[i], GWL_STYLE, style);
-            SendMessageW(g_app->hwndShortcutButtons[i], WM_SETFONT, (WPARAM)GetShortcutButtonUIFont(hwnd), TRUE);
-            SetWindowPos(
-                g_app->hwndShortcutButtons[i],
-                nullptr,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-        }
-
-        if (!g_app->chatVisible) {
-            ShowWindow(g_app->hwndChat, SW_HIDE);
-        }
         ApplyStyles();
 
         for (int i = 0; i < INPUT_ROWS; ++i)
@@ -971,6 +916,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
 
         FitWindowToScreenGrid(hwnd, g_app->screenCols, g_app->screenRows, false);
+        if (g_app->mainAlwaysOnTop)
+        {
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
         LayoutChildren(hwnd);
 
         if (!StartTinTinProcess())
@@ -980,15 +930,21 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return -1;
         }
 
-        StartCaptureLog();
-
         g_app->readerThread = std::thread(ReaderThreadProc, hwnd, g_app->proc.stdoutRead);
         g_app->activeEditIndex = 0;
         SetFocus(g_app->hwndEdit[0]);
         SendMessageW(g_app->hwndEdit[0], EM_SETSEL, -1, -1);
         EnsureVisibleEditCaret(g_app->hwndEdit[0]);
+        InitializeShortcutButtons();
         ApplyShortcutButtons(hwnd);
         SetInputViewLatest();
+
+        RECT initMainRect{};
+        if (GetWindowRect(hwnd, &initMainRect))
+        {
+            s_lastMainWindowRect = initMainRect;
+            s_hasLastMainWindowRect = true;
+        }
 
         if (!g_app->history.empty())
         {
@@ -1002,6 +958,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
 
         ApplyKeepAliveTimer(hwnd);
+
+        if (g_app && g_app->captureLogEnabled)
+            StartCaptureLog();
 
         // ★ uptime 변수가 이미 목록에 있다면 00:00:00으로 초기화만 해줍니다.
         if (g_app) {
@@ -1031,98 +990,62 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case ID_MENU_EDIT_SAVE_CUR:
             if (g_app && g_app->termBuffer) SaveTextToFile(hwnd, g_app->termBuffer->GetCurrentScreenText());
             return 0;
-        case ID_MENU_OPTIONS_CHAT_CAPTURE:
+
+        case ID_MENU_CAPTURE_TOGGLE:
         {
-            ShowChatCaptureDialog(hwnd);
+            if (g_app)
+            {
+                g_app->captureLogEnabled = !g_app->captureLogEnabled;
+                if (g_app->captureLogEnabled)
+                    StartCaptureLog();
+                else
+                    StopCaptureLog();
+                SaveCaptureLogSettings();
+                UpdateMenuToggleStates();
+            }
             return 0;
         }
-        case ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE:
-        {
-            if (!g_app || !g_app->hwndChat) break;
-            g_app->chatVisible = !g_app->chatVisible;
-
-            if (g_app->chatVisible) {
-                if (g_app->chatDocked) {
-                    ShowWindow(g_app->hwndChat, SW_SHOW);
-                }
-                else {
-                    if (g_app->hwndChatFloat) ShowWindow(g_app->hwndChatFloat, SW_SHOW);
-                }
-
-                SetupChatRichEditDefaults(g_app->hwndChat);
-                CHARFORMAT2W cf = {}; cf.cbSize = sizeof(cf);
-                cf.dwMask = CFM_COLOR | CFM_BACKCOLOR;
-                cf.crTextColor = g_app->chatStyle.textColor;
-                cf.crBackColor = g_app->chatStyle.backColor;
-                SendMessageW(g_app->hwndChat, EM_SETSEL, 0, -1);
-                SendMessageW(g_app->hwndChat, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
-                SendMessageW(g_app->hwndChat, EM_SETSEL, -1, -1);
-                SendMessageW(g_app->hwndChat, EM_SETBKGNDCOLOR, 0, g_app->chatStyle.backColor);
-                InvalidateRect(g_app->hwndChat, nullptr, TRUE);
-            }
-            else {
-                if (g_app->chatDocked) {
-                    ShowWindow(g_app->hwndChat, SW_HIDE);
-                }
-                else {
-                    if (g_app->hwndChatFloat) ShowWindow(g_app->hwndChatFloat, SW_HIDE);
-                }
-            }
-
-            FitWindowToScreenGrid(hwnd, g_app->screenCols, g_app->screenRows, false);
-            LayoutChildren(hwnd);
-            InvalidateRect(hwnd, nullptr, TRUE);
+        case ID_MENU_CAPTURE_OPEN_FOLDER:
+            OpenCaptureLogFolder(hwnd);
             return 0;
-        }
-        case ID_MENU_OPTIONS_CHAT_DOCK:
-        {
-            if (!g_app || !g_app->hwndChat) break;
-
-            // ★ 핵심: 도킹을 하든 분리를 하든, 숨겨져 있다면 무조건 보이게 강제 전환!
-            if (!g_app->chatVisible) {
-                g_app->chatVisible = true;
-                UpdateMenuToggleStates(); // 메뉴 글씨를 '숨기기'로 즉시 갱신
-            }
-
-            g_app->chatDocked = !g_app->chatDocked;
-
-            if (g_app->chatDocked) {
-                // [도킹되는 경우]
-                if (g_app->hwndChatFloat) {
-                    GetWindowRect(g_app->hwndChatFloat, &g_app->chatFloatRect);
-                    ShowWindow(g_app->hwndChatFloat, SW_HIDE);
-                }
-
-                SetParent(g_app->hwndChat, hwnd);
-
-                // 위에서 무조건 보이게(true) 만들었으므로 당당하게 SHOW!
-                ShowWindow(g_app->hwndChat, SW_SHOW);
-            }
-            else {
-                // [분리되는 경우]
-                SetParent(g_app->hwndChat, g_app->hwndChatFloat);
-
-                if (g_app->hwndChatFloat) {
-                    SetWindowPos(g_app->hwndChatFloat, HWND_TOP,
-                        g_app->chatFloatRect.left, g_app->chatFloatRect.top,
-                        g_app->chatFloatRect.right - g_app->chatFloatRect.left,
-                        g_app->chatFloatRect.bottom - g_app->chatFloatRect.top,
-                        SWP_NOZORDER);
-
-                    ShowWindow(g_app->hwndChatFloat, SW_SHOW);
-                }
-
-                ShowWindow(g_app->hwndChat, SW_SHOW);
-
-                RECT rc; GetClientRect(g_app->hwndChatFloat, &rc);
-                MoveWindow(g_app->hwndChat, 0, 0, rc.right, rc.bottom, TRUE);
-            }
-
-            FitWindowToScreenGrid(hwnd, g_app->screenCols, g_app->screenRows, false);
-            LayoutChildren(hwnd);
-            InvalidateRect(hwnd, nullptr, TRUE);
+        case ID_MENU_CAPTURE_CLOSE_ALL:
+            CloseAllCaptureTailWindows();
+            if (g_app && g_app->hwndMain) CreateMainMenu(g_app->hwndMain);
             return 0;
-        }
+        case ID_MENU_CAPTURE_TAIL_ALL:
+            ShowCaptureTailWindow(hwnd, 0);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_CHAT:
+            ShowCaptureTailWindow(hwnd, 1);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_AUCTION:
+            ShowCaptureTailWindow(hwnd, 2);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_ITEM:
+            ShowCaptureTailWindow(hwnd, 3);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_CUSTOM:
+            ShowCaptureTailWindow(hwnd, 4);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_TALK:
+            ShowCaptureTailWindow(hwnd, 5);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_EXP:
+            ShowCaptureTailWindow(hwnd, 6);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_USER1:
+            ShowCaptureTailWindow(hwnd, 7);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_USER2:
+            ShowCaptureTailWindow(hwnd, 8);
+            return 0;
+        case ID_MENU_CAPTURE_TAIL_USER3:
+            ShowCaptureTailWindow(hwnd, 9);
+            return 0;
+        case ID_MENU_CAPTURE_FILTER_SETTINGS:
+            PromptTailFilterSettings(hwnd);
+            return 0;
+
         case ID_MENU_SETTINGS:
         {
             ShowSettingsDialog(hwnd);
@@ -1337,17 +1260,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
             return 0;
         }
-        case ID_MENU_OPTIONS_CAPTURE_LOG:
-        {
-            g_app->captureLogEnabled = !g_app->captureLogEnabled;
-            if (g_app->captureLogEnabled) StartCaptureLog(); else StopCaptureLog();
-            SaveCaptureLogSettings(); UpdateMenuToggleStates();
-            if (g_app && g_app->hwndEdit[g_app->activeEditIndex]) {
-                HWND hEdit = g_app->hwndEdit[g_app->activeEditIndex];
-                SetFocus(hEdit); SendMessageW(hEdit, EM_SETSEL, -1, -1); EnsureVisibleEditCaret(hEdit);
-            }
-            return 0;
-        }
+
         case ID_MENU_OPTIONS_KEEPALIVE_TOGGLE:
         {
             if (!g_app) break;
@@ -1364,19 +1277,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
 
-        case ID_MENU_OPTIONS_CHAT_TIME_TOGGLE:
-        {
-            if (!g_app) break;
-            g_app->chatTimestampEnabled = !g_app->chatTimestampEnabled; // 상태 반전
-            SaveChatCaptureSettings(); // 즉시 파일에 저장
-            UpdateMenuToggleStates(); // 메뉴 글씨 갱신
-
-            if (g_app->hwndEdit[g_app->activeEditIndex]) {
-                HWND hEdit = g_app->hwndEdit[g_app->activeEditIndex];
-                SetFocus(hEdit); SendMessageW(hEdit, EM_SETSEL, -1, -1); EnsureVisibleEditCaret(hEdit);
-            }
-            return 0;
-        }
         case ID_MENU_OPTIONS_SCREEN_SIZE:
         {
             int cols = g_app->screenCols; int rows = g_app->screenRows;
@@ -1420,7 +1320,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             ShowFindDialog(hwnd);
             return 0;
         case ID_MENU_EDIT_HIGHLIGHT:
-            ShowHighlightDialog(hwnd);
+            MessageBoxW(hwnd, L"장시간 실행 안정성을 위해 트리거/실시간 하이라이트 기능은 제거했습니다.", L"안내", MB_OK | MB_ICONINFORMATION);
             return 0;
 
         case ID_MENU_EDIT_FUNCTION_SHORTCUT:
@@ -1450,93 +1350,152 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             break;
         }
         break;
+    case WM_TIMER:
+    {
+        if (wParam == 2001 && g_app && g_app->isSessionActive) {
+            time_t now = time(NULL);
+            int diff = (int)(now - g_app->sessionStartTime);
+            if (diff < 0) diff = 0;
 
-       case WM_TIMER:
-       {
-           if (wParam == 2001 && g_app && g_app->isSessionActive) {
-               time_t now = time(NULL);
-               int diff = (int)(now - g_app->sessionStartTime);
-               if (diff < 0) diff = 0;
+            wchar_t buf[32];
+            swprintf(buf, 32, L"%02d:%02d:%02d", diff / 3600, (diff % 3600) / 60, diff % 60);
 
-               wchar_t buf[32];
-               swprintf(buf, 32, L"%02d:%02d:%02d", diff / 3600, (diff % 3600) / 60, diff % 60);
+            VariableItem* targetVar = nullptr;
+            for (auto& v : g_app->variables) {
+                if (_wcsicmp(v.name.c_str(), L"uptime") == 0) {
+                    targetVar = &v;
+                    break;
+                }
+            }
 
-               VariableItem* targetVar = nullptr;
-               for (auto& v : g_app->variables) {
-                   if (_wcsicmp(v.name.c_str(), L"uptime") == 0) {
-                       targetVar = &v;
-                       break;
-                   }
-               }
+            if (targetVar) {
+                targetVar->value = buf;
+            }
+            else {
+                VariableItem vi;
+                vi.name = L"uptime";
+                vi.value = buf;
+                vi.enabled = true;
+                vi.type = 0;
+                g_app->variables.push_back(vi);
+            }
 
-               if (targetVar) {
-                   targetVar->value = buf;
-               }
-               else {
-                   VariableItem vi;
-                   vi.name = L"uptime";
-                   vi.value = buf;
-                   vi.enabled = true;
-                   vi.type = 0;
-                   g_app->variables.push_back(vi);
-               }
+            if (g_app->hwndStatusBar) {
+                InvalidateRect(g_app->hwndStatusBar, NULL, FALSE);
+            }
+            return 0;
+        }
 
-               if (g_app->hwndStatusBar) {
-                   InvalidateRect(g_app->hwndStatusBar, NULL, FALSE);
-               }
-               return 0;
-           }
+        if (wParam == ID_TIMER_DEFER_SAVE) {
+            KillTimer(hwnd, ID_TIMER_DEFER_SAVE);
+            SaveWindowSettings(hwnd);
+            return 0;
+        }
 
-           if (wParam == ID_TIMER_DEFER_SAVE) {
-               KillTimer(hwnd, ID_TIMER_DEFER_SAVE);
-               SaveWindowSettings(hwnd);
-               return 0;
-           }
+        if (wParam == ID_TIMER_LOG_REDRAW) {
+            KillTimer(hwnd, ID_TIMER_LOG_REDRAW);
+        
+            if (g_app)
+                g_app->logRedrawPending = false;
+        
+            if (g_app && g_app->hwndLog && IsWindow(g_app->hwndLog)) {
+                RedrawWindow(g_app->hwndLog, nullptr, nullptr, RDW_INVALIDATE);
+            }
+            FlushCaptureLogBuffer();
+            return 0;
+        }
 
-           if (wParam == ID_TIMER_LOG_REDRAW) {
-               KillTimer(hwnd, ID_TIMER_LOG_REDRAW);
+        if (wParam == ID_TIMER_KEEPALIVE) {
+            SendKeepAliveNow();
+            return 0;
+        }
 
-               if (g_app)
-                   g_app->logRedrawPending = false;
+        if (wParam == ID_TIMER_AUTORECONNECT) {
+            KillTimer(hwnd, ID_TIMER_AUTORECONNECT);
+            if (g_app && g_app->hasActiveSession && g_app->activeSession.autoReconnect) {
+                AddressBookEntry entry = g_app->activeSession;
+                g_app->isConnected = false;
+                ConnectAddressBookEntry(entry);
+            }
+            return 0;
+        }
 
-               if (g_app && g_app->hwndLog) {
-                   InvalidateRect(g_app->hwndLog, NULL, FALSE);
-               }
-               return 0;
-           }
+        if (wParam == ID_TIMER_SWITCH_CONNECT) {
+            KillTimer(hwnd, ID_TIMER_SWITCH_CONNECT);
 
-           if (wParam == ID_TIMER_KEEPALIVE) {
-               SendKeepAliveNow();
-               return 0;
-           }
+            if (g_app && g_app->hasPendingConnect) {
+                AddressBookEntry entry = g_app->pendingConnectEntry;
+                g_app->hasPendingConnect = false;
+                ConnectAddressBookEntry(entry);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        // 커스텀 상단 메뉴 클릭 처리
+        if (g_app && !g_app->menuHidden)
+        {
+            int hit = HitTestCustomMenuBar(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (hit >= 0)
+            {
+                ShowCustomMenuPopup(hwnd, hit);
+                return 0;
+            }
+        }
+        else if (g_app && g_app->menuHidden)
+        {
+            // 메뉴가 숨겨진 상태에서 메인 빈 영역을 클릭하면 메뉴를 다시 보이게 합니다.
+            g_app->menuHidden = false;
+            LayoutChildren(hwnd);
+            InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+        }
+        break;
+    }
 
-           if (wParam == ID_TIMER_AUTORECONNECT) {
-               KillTimer(hwnd, ID_TIMER_AUTORECONNECT);
+    case WM_MOUSEMOVE:
+    {
+        if (g_app && !g_app->menuHidden)
+        {
+            int hit = HitTestCustomMenuBar(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (hit != g_app->hotMenuIndex)
+            {
+                g_app->hotMenuIndex = hit;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        break;
+    }
 
-               if (g_app && g_app->hasActiveSession) {
-                   ConnectAddressBookEntry(g_app->activeSession);
-               }
-               return 0;
-           }
+    case WM_RBUTTONUP:
+    case WM_CONTEXTMENU:
+    {
+        if (g_app && g_app->menuHidden)
+        {
+            HMENU hMenu = CreatePopupMenu();
+            if (hMenu)
+            {
+                AppendMenuW(hMenu, MF_STRING, ID_LOG_SHOW_MENU, L"상단 메뉴 보이기");
+                POINT pt;
+                if (msg == WM_CONTEXTMENU && lParam != (LPARAM)-1)
+                {
+                    pt.x = GET_X_LPARAM(lParam);
+                    pt.y = GET_Y_LPARAM(lParam);
+                }
+                else
+                {
+                    GetCursorPos(&pt);
+                }
+                TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, nullptr);
+                DestroyMenu(hMenu);
+                return 0;
+            }
+        }
+        break;
+    }
 
-           if (wParam == ID_TIMER_SWITCH_CONNECT) {
-               KillTimer(hwnd, ID_TIMER_SWITCH_CONNECT);
-
-               if (g_app && g_app->hasPendingConnect) {
-                   AddressBookEntry entry = g_app->pendingConnectEntry;
-                   g_app->hasPendingConnect = false;
-                   ConnectAddressBookEntry(entry);
-               }
-               return 0;
-           }
-
-           if (wParam == ID_TIMER_USER_ENGINE) {
-               RunTimerEngine();
-               return 0;
-           }
-
-           break;
-       }
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -1549,42 +1508,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         FillRect(hdc, &rc, hbrBack);
         DeleteObject(hbrBack); // GDI 객체는 바로 삭제
 
-        // 2. 커스텀 메뉴바 그리기
+        // 안전판 수정: 커스텀 상단 메뉴는 실제 메뉴바가 아니라 클라이언트 영역에 직접 그리는 방식입니다.
+        // 이전 안전판에서 이 호출이 빠져 메뉴가 보이지 않았습니다.
         DrawCustomMenuBar(hdc, hwnd);
-
-        // 3. 채팅창이 도킹된 경우 구분선(Separator) 그리기
-        if (g_app && g_app->chatDocked && g_app->hwndChat && g_app->chatVisible) {
-
-            // 폰트 높이 계산
-            int chatFontCy = 16;
-            HFONT hChatFont = g_app->hFontChat ? g_app->hFontChat : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-            HFONT oldFont = (HFONT)SelectObject(hdc, hChatFont);
-
-            TEXTMETRICW tm = {};
-            GetTextMetricsW(hdc, &tm);
-            chatFontCy = tm.tmHeight + tm.tmExternalLeading;
-            SelectObject(hdc, oldFont);
-
-            // 채팅창 높이 계산
-            int chatHeight = (g_app->chatDockedLines * chatFontCy) + 24;
-            if (chatHeight < 24) chatHeight = 24;
-
-            int menuHeight = (!g_app->menuHidden) ? g_app->customMenuHeight : 0;
-
-            // 구분선 위치 설정
-            RECT sep = {
-                0,
-                menuHeight + chatHeight,
-                rc.right,
-                menuHeight + chatHeight + INPUT_SEPARATOR_HEIGHT
-            };
-
-            // [수정] 구분선 색상: 다크 테마에 어울리게 배경보다 약간 밝은 회색으로 변경
-            // COLOR_BTNFACE 대신 직접 색상을 지정하는 것이 예쁩니다.
-            HBRUSH hbrSep = CreateSolidBrush(RGB(75, 75, 80));
-            FillRect(hdc, &sep, hbrSep);
-            DeleteObject(hbrSep);
-        }
 
         EndPaint(hwnd, &ps);
         return 0;
@@ -1592,11 +1518,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
     case WM_ERASEBKGND:
     {
-        HDC hdc = (HDC)wParam;
-        RECT rc; GetClientRect(hwnd, &rc);
-        HBRUSH brush = CreateSolidBrush(g_app ? g_app->mainBackColor : RGB(45, 45, 48));
-        FillRect(hdc, &rc, brush);
-        DeleteObject(brush);
         return 1;
     }
 
@@ -1604,149 +1525,64 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     {
         LayoutChildren(hwnd);
         QueueSaveWindowSettings(hwnd);
-        if (g_app->hwndShortcutBar) RedrawWindow(g_app->hwndShortcutBar, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
-        if (g_app->hwndInput) RedrawWindow(g_app->hwndInput, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
-        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
+    
+        if (g_app && g_app->hwndShortcutBar)
+            InvalidateRect(g_app->hwndShortcutBar, nullptr, FALSE);
+    
+        if (g_app && g_app->hwndInput)
+            InvalidateRect(g_app->hwndInput, nullptr, FALSE);
+    
         return 0;
     }
 
     case WM_MOVE:
-        if (!IsIconic(hwnd)) QueueSaveWindowSettings(hwnd);
+    {
+        if (!IsIconic(hwnd))
+        {
+            RECT now{};
+            if (GetWindowRect(hwnd, &now))
+            {
+                if (s_hasLastMainWindowRect)
+                    TailNotifyMainWindowMoved(hwnd, s_lastMainWindowRect, now);
+                s_lastMainWindowRect = now;
+                s_hasLastMainWindowRect = true;
+            }
+            QueueSaveWindowSettings(hwnd);
+        }
         return 0;
+    }
 
     case WM_EXITSIZEMOVE:
-        if (!IsIconic(hwnd)) SaveWindowSettings(hwnd);
+    {
+        if (!IsIconic(hwnd))
+        {
+            RECT now{};
+            if (GetWindowRect(hwnd, &now))
+            {
+                if (s_hasLastMainWindowRect)
+                    TailNotifyMainWindowMoved(hwnd, s_lastMainWindowRect, now);
+                s_lastMainWindowRect = now;
+                s_hasLastMainWindowRect = true;
+            }
+            SaveWindowSettings(hwnd);
+        }
         return 0;
+    }
     case WM_APP_LOG_CHUNK:
     {
         std::unique_ptr<LogChunk> chunk(reinterpret_cast<LogChunk*>(lParam));
-        if (!chunk || !g_app)
+        if (!chunk || !g_app || chunk->runs.empty())
             return 0;
 
-        static std::wstring captureBuffer;
-        static DWORD s_lastPromptCheckTick = 0;
-
-        // 1) 청크 텍스트 누적
-        for (const auto& run : chunk->runs)
+        // buildfix25: 갈무리 파일 저장은 ReaderThread에서 원본 ANSI 바이트로 처리합니다.
+        // 여기서는 화면 갱신 타이머만 예약합니다.
+    
+        if (!g_app->logRedrawPending)
         {
-            captureBuffer += run.text;
+            g_app->logRedrawPending = true;
+            SetTimer(hwnd, ID_TIMER_LOG_REDRAW, 30, nullptr);
         }
-
-        // 버퍼 무한 증가 방지
-        const size_t MAX_CAPTURE_BUFFER = 65536;
-        if (captureBuffer.size() > MAX_CAPTURE_BUFFER)
-        {
-            captureBuffer.erase(0, captureBuffer.size() - MAX_CAPTURE_BUFFER);
-        }
-
-        // 2) 갈무리 저장 (켜졌을 때만)
-        if (g_app->captureLogEnabled)
-        {
-            WriteRunsToCaptureLog(chunk->runs);
-        }
-
-        bool needStatusRedraw = false;
-
-        // 3) 완성된 줄만 처리
-        size_t pos = 0;
-        while ((pos = captureBuffer.find(L'\n')) != std::wstring::npos)
-        {
-            std::wstring line = captureBuffer.substr(0, pos);
-            captureBuffer.erase(0, pos + 1);
-
-            if (!line.empty() && line.back() == L'\r')
-                line.pop_back();
-
-            if (line.empty())
-                continue;
-
-            // 실제 서버 출력이 들어오기 시작하면 연결 상태 true
-            if (!g_app->isConnected)
-            {
-                g_app->isConnected = true;
-                needStatusRedraw = true;
-            }
-
-            // 자동 로그인: 활성 시간 안에서만
-            if (g_app->autoLoginWindowActive)
-            {
-                RunAutoLoginEngine(line);
-            }
-
-            // 채팅 캡처: 옵션 켜졌을 때만
-            if (g_app->chatCaptureEnabled)
-            {
-                RunChatCaptureEngine(line);
-            }
-
-            // 세션 상태 문자열 검사
-            if (line.find(L"세션이 종료되었습니다.") != std::wstring::npos)
-            {
-                if (g_app->isConnected)
-                {
-                    g_app->isConnected = false;
-                    needStatusRedraw = true;
-                }
-
-                g_app->autoLoginWindowActive = false;
-
-                if (g_app->hasActiveSession && g_app->activeSession.autoReconnect)
-                {
-                    SetTimer(hwnd, ID_TIMER_AUTORECONNECT, 5000, nullptr);
-                }
-            }
-            else if (line.find(L"세션이 활성화되었습니다.") != std::wstring::npos)
-            {
-                KillTimer(hwnd, ID_TIMER_AUTORECONNECT);
-            }
-
-            // 하이라이트 룰 검사
-            for (const auto& rule : g_hiState.rules)
-            {
-                if (!rule.enabled || rule.pattern.empty())
-                    continue;
-
-                std::vector<std::wstring> caps;
-                if (MatchHighlightPattern(rule.pattern, line, caps))
-                {
-                    ExecuteHighlightRuleAction(rule, caps);
-                }
-            }
-        }
-
-        // 4) 마지막 불완전 줄은 짧게 잘라서 제한적으로만 검사
-        if (!captureBuffer.empty() && g_app->autoLoginWindowActive)
-        {
-            DWORD now = GetTickCount();
-            if (now - s_lastPromptCheckTick >= 300)
-            {
-                s_lastPromptCheckTick = now;
-
-                std::wstring promptLine = captureBuffer;
-                if (promptLine.size() > 256)
-                {
-                    promptLine.erase(0, promptLine.size() - 256);
-                }
-
-                RunAutoLoginEngine(promptLine);
-            }
-        }
-
-        // 5) 로그창 다시그리기 예약은 1회만
-        if (g_app->hwndLog)
-        {
-            if (!g_app->logRedrawPending)
-            {
-                g_app->logRedrawPending = true;
-                SetTimer(hwnd, ID_TIMER_LOG_REDRAW, 30, nullptr);
-            }
-        }
-
-        if (needStatusRedraw && g_app->hwndStatusBar)
-        {
-            InvalidateRect(g_app->hwndStatusBar, nullptr, FALSE);
-        }
-
+    
         return 0;
     }
     case WM_APP + 4: // WM_APP_VAR_UPDATE
@@ -1769,6 +1605,8 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 else {
                     // 세션 종료 시 처리
                     g_app->isSessionActive = false;
+                    g_app->autoLoginWindowActive = false;
+                    g_app->keepAliveBlockedUntilTick = 0;
                     KillTimer(hwnd, 2001); // 타이머 중지
 
                     // 종료 시 시간을 00:00:00으로 초기화 (중복 방지 로직 적용)
@@ -1869,54 +1707,19 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
 
     case WM_SETFOCUS:
+    {
         if (g_app) {
             int idx = g_app->activeEditIndex;
-            if (idx < 0 || idx >= INPUT_ROWS) idx = 0;
+            if (idx < 0 || idx >= INPUT_ROWS)
+                idx = 0;
+    
             g_app->activeEditIndex = idx;
-            if (g_app->hwndEdit[idx]) { SetFocus(g_app->hwndEdit[idx]); SendMessageW(g_app->hwndEdit[idx], EM_SETSEL, -1, -1); EnsureVisibleEditCaret(g_app->hwndEdit[idx]); }
+    
+            if (g_app->hwndEdit[idx] && GetFocus() != g_app->hwndEdit[idx]) {
+                SetFocus(g_app->hwndEdit[idx]);
+            }
         }
         return 0;
-
-    case WM_LBUTTONDOWN:
-    {
-        int x = GET_X_LPARAM(lParam);
-        int y = GET_Y_LPARAM(lParam);
-
-        int hit = HitTestCustomMenuBar(x, y);
-        if (hit >= 0)
-        {
-            g_app->pendingMenuIndex = hit;
-            g_app->hotMenuIndex = hit;
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        }
-
-        break;
-    }
-    case WM_LBUTTONUP:
-    {
-        if (g_app && g_app->pendingMenuIndex >= 0)
-        {
-            int x = GET_X_LPARAM(lParam);
-            int y = GET_Y_LPARAM(lParam);
-
-            int hit = HitTestCustomMenuBar(x, y);
-            int menuIndex = g_app->pendingMenuIndex;
-            g_app->pendingMenuIndex = -1;
-
-            if (hit == menuIndex)
-            {
-                ShowCustomMenuPopup(hwnd, menuIndex);
-            }
-            else
-            {
-                g_app->hotMenuIndex = -1;
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
-            return 0;
-        }
-
-        break;
     }
 
     case WM_SYSCOMMAND:
@@ -2029,7 +1832,7 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                     COLORREF drawFg = c.fg;
                     COLORREF drawBg = (c.bg == RGB(0, 0, 0)) ? bgColor : c.bg;
 
-                    if (g_hiState.active && c.ch != L' ')
+                    if (false && g_hiState.active && c.ch != L' ')
                     {
                         int charIdx = colToCharIdx[x];
                         if (charIdx != -1)
@@ -2071,9 +1874,11 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                     cellRc.right = cellRc.left + cell.cx * cw;
                     cellRc.bottom = cellRc.top + cell.cy;
 
-                    HBRUSH hbrCell = CreateSolidBrush(drawBg);
-                    FillRect(hdcMem, &cellRc, hbrCell);
-                    DeleteObject(hbrCell);
+                    // 셀마다 CreateSolidBrush/DeleteObject를 반복하지 않고
+                    // ExtTextOutW(ETO_OPAQUE)로 배경만 채웁니다. 장시간 렌더링 안정성용.
+                    SetBkColor(hdcMem, drawBg);
+                    ExtTextOutW(hdcMem, cellRc.left, cellRc.top,
+                        ETO_OPAQUE, &cellRc, L"", 0, nullptr);
                 }
 
                 // 2차 패스: 글자만 그림
@@ -2086,7 +1891,7 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                     COLORREF drawFg = c.fg;
                     COLORREF drawBg = (c.bg == RGB(0, 0, 0)) ? bgColor : c.bg;
 
-                    if (g_hiState.active && c.ch != L' ')
+                    if (false && g_hiState.active && c.ch != L' ')
                     {
                         int charIdx = colToCharIdx[x];
                         if (charIdx != -1)
@@ -2150,18 +1955,16 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                         {
                             int expectedWidth = cell.cx * 2;
 
-                            if (NeedsExtraRightShiftForWideGlyph(c.ch))
-                            {
-                                int overlapOrMissing = expectedWidth - glyphSz.cx;
-                                if (overlapOrMissing < 0)
-                                    overlapOrMissing = 0;
-
-                                drawX = cellRc.left + overlapOrMissing + 16;
-                            }
+                            // EUC-KR/CP949 서버의 지도는 ○, ─, │ 같은 기호를
+                            // 논리적으로 2칸 전각 문자로 배치하는 경우가 많습니다.
+                            // 예전 코드의 +16 고정 보정은 폰트 크기와 DPI에 따라
+                            // 글자를 오른쪽으로 과하게 밀어 지도가 깨질 수 있습니다.
+                            // 따라서 글리프가 2칸보다 좁을 때만 2칸 셀 안에서
+                            // 가운데 정렬하고, 2칸보다 넓으면 왼쪽 기준으로 그립니다.
+                            if (glyphSz.cx < expectedWidth)
+                                drawX = cellRc.left + (expectedWidth - glyphSz.cx) / 2;
                             else
-                            {
                                 drawX = cellRc.left;
-                            }
                         }
 
                         TextOutW(hdcMem, drawX, cellRc.top, out, 1);
@@ -2329,29 +2132,18 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
 
     case WM_RBUTTONUP:
+    case WM_CONTEXTMENU:
     {
         HMENU hMenu = CreatePopupMenu();
         if (hMenu) {
-            auto AddODItem = [](HMENU hTargetMenu, UINT_PTR id, const wchar_t* text)
-                {
-                    AppendMenuW(hTargetMenu, MF_OWNERDRAW | MF_STRING, id, text);
-                };
-
+            // 터미널 우클릭 메뉴는 안정성을 위해 일반 문자열 메뉴로 표시합니다.
             if (g_app && g_app->menuHidden) {
+                AppendMenuW(hMenu, MF_STRING, ID_LOG_SHOW_MENU, L"상단 메뉴 보이기");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-                AddODItem(hMenu, ID_LOG_SHOW_MENU, L"상단 메뉴 보이기");
             }
 
-            AddODItem(hMenu, ID_LOG_COPY, L"복사하기");
+            AppendMenuW(hMenu, MF_STRING, ID_LOG_COPY, L"복사하기");
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-
-            if (g_app) {
-                AddODItem(hMenu, ID_MENU_OPTIONS_CHAT_DOCK,
-                    g_app->chatDocked ? L"채팅 캡처창 분리(&D)" : L"채팅 캡처창 도킹(&D)");
-                AddODItem(hMenu, ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE,
-                    g_app->chatVisible ? L"채팅 캡처창 숨기기(&H)" : L"채팅 캡처창 보이기(&H)");
-                AddODItem(hMenu, ID_LOG_CLEAR_CHAT, L"채팅 캡처창 내용 지우기(&X)");
-            }
 
             POINT pt;
             GetCursorPos(&pt);
@@ -2532,7 +2324,7 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         g_app->historyBrowseIndex = -1;
         LRESULT lr = CallWindowProcW(g_app->oldEditProc[index], hwnd, msg, wParam, lParam);
         EnsureVisibleEditCaret(hwnd);
-        InvalidateRect(g_app->hwndInput, nullptr, TRUE);
+        InvalidateRect(g_app->hwndInput, nullptr, FALSE);
         return lr;
     }
 
@@ -2540,7 +2332,7 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     {
         LRESULT lr = CallWindowProcW(g_app->oldEditProc[index], hwnd, msg, wParam, lParam);
         HideCaret(hwnd);
-        InvalidateRect(g_app->hwndInput, nullptr, TRUE);
+        InvalidateRect(g_app->hwndInput, nullptr, FALSE);
         return lr;
     }
 
@@ -2560,6 +2352,9 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_SYSKEYDOWN:
     {
+        if (HandleGlobalMenuShortcut(hwnd, msg, wParam))
+            return 0;
+
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
@@ -2612,6 +2407,9 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_KEYDOWN:
     {
+        if (HandleGlobalMenuShortcut(hwnd, msg, wParam))
+            return 0;
+
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
@@ -2634,21 +2432,20 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
 
-        // --- 로그창 스크롤 및 블럭 지정 단축키 (회원님 요청 로직) ---
         if (!ctrl && !shift && !alt && wParam == VK_PRIOR) {
-            if (g_app && g_app->termBuffer) { g_app->termBuffer->DoScroll(g_app->termBuffer->height / 2); InvalidateRect(g_app->hwndLog, nullptr, TRUE); }
+            if (g_app && g_app->termBuffer) { g_app->termBuffer->DoScroll(g_app->termBuffer->height / 2); InvalidateRect(g_app->hwndLog, nullptr, FALSE); }
             return 0;
         }
         if (!ctrl && !shift && !alt && wParam == VK_NEXT) {
-            if (g_app && g_app->termBuffer) { g_app->termBuffer->DoScroll(-(g_app->termBuffer->height / 2)); InvalidateRect(g_app->hwndLog, nullptr, TRUE); }
+            if (g_app && g_app->termBuffer) { g_app->termBuffer->DoScroll(-(g_app->termBuffer->height / 2)); InvalidateRect(g_app->hwndLog, nullptr, FALSE); }
             return 0;
         }
         if (ctrl && !shift && !alt && wParam == VK_HOME) {
-            if (g_app && g_app->termBuffer) { g_app->termBuffer->scrollOffset = (int)g_app->termBuffer->history.size(); InvalidateRect(g_app->hwndLog, nullptr, TRUE); }
+            if (g_app && g_app->termBuffer) { g_app->termBuffer->scrollOffset = (int)g_app->termBuffer->history.size(); InvalidateRect(g_app->hwndLog, nullptr, FALSE); }
             return 0;
         }
         if (ctrl && !shift && !alt && wParam == VK_END) {
-            if (g_app && g_app->termBuffer) { g_app->termBuffer->scrollOffset = 0; InvalidateRect(g_app->hwndLog, nullptr, TRUE); }
+            if (g_app && g_app->termBuffer) { g_app->termBuffer->scrollOffset = 0; InvalidateRect(g_app->hwndLog, nullptr, FALSE); }
             return 0;
         }
         if (ctrl && shift && !alt && wParam == VK_HOME) {
@@ -2656,7 +2453,7 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 int currentViewBottomY = (int)g_app->termBuffer->history.size() + g_app->termBuffer->height - 1 - g_app->termBuffer->scrollOffset;
                 g_app->termBuffer->SetSelectionStart(0, 0);
                 g_app->termBuffer->SetSelectionEnd(g_app->termBuffer->width - 1, currentViewBottomY);
-                InvalidateRect(g_app->hwndLog, nullptr, TRUE);
+                InvalidateRect(g_app->hwndLog, nullptr, FALSE);
             }
             return 0;
         }
@@ -2666,7 +2463,7 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 int absoluteBottom = (int)g_app->termBuffer->history.size() + g_app->termBuffer->height - 1;
                 g_app->termBuffer->SetSelectionStart(0, currentViewTopY);
                 g_app->termBuffer->SetSelectionEnd(g_app->termBuffer->width - 1, absoluteBottom);
-                InvalidateRect(g_app->hwndLog, nullptr, TRUE);
+                InvalidateRect(g_app->hwndLog, nullptr, FALSE);
             }
             return 0;
         }

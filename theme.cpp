@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -7,6 +7,8 @@
 #include "resource.h"
 #include "settings.h"
 #include "input.h"
+#include "auto_login.h"
+#include "log_tail.h"
 #include <commctrl.h>
 
 // ==============================================
@@ -218,7 +220,10 @@ void AnsiToRunsParser::FlushText()
     std::wstring w = decoder_.Feed(textBytes_);
     textBytes_.clear();
     if (!w.empty())
+    {
+        RunAutoLoginEngine(w);
         AppendRun(w);
+    }
 }
 
 void AnsiToRunsParser::AppendRun(std::wstring text)
@@ -556,30 +561,36 @@ static void DrawAnsiThemePreview(HDC hdc, const RECT& rc, int themeId)
 
     textY += 34;
 
-    struct SampleLine
+    struct ColorPairLine
     {
-        int colorIndex;
-        const wchar_t* text;
+        int normalIndex;
+        int brightIndex;
+        const wchar_t* normalName;
+        const wchar_t* brightName;
     };
 
-    const SampleLine lines[] =
+    const ColorPairLine lines[] =
     {
-        { 0,  L"30/검정      ===== ===== =====" },
-        { 7,  L"37/기본흰색   TinTin++ GUI Sample" },
-        { 8,  L"90/밝은검정   ---===<< 샘플 >>===---" },
-        { 9,  L"91/밝은빨강   빨강 샘플" },
-        { 10, L"92/밝은초록   초록 샘플" },
-        { 11, L"93/밝은노랑   노랑 샘플" },
-        { 12, L"94/밝은파랑   파랑 샘플" },
-        { 13, L"95/밝은자홍   자홍 샘플" },
-        { 14, L"96/밝은청록   청록 샘플" },
-        { 15, L"97/밝은흰색   흰색 샘플" },
+        { 1, 9,  L"빨강 샘플",   L"밝은 빨강 샘플" },
+        { 2, 10, L"초록 샘플",   L"밝은 초록 샘플" },
+        { 3, 11, L"노랑 샘플",   L"밝은 노랑 샘플" },
+        { 4, 12, L"파랑 샘플",   L"밝은 파랑 샘플" },
+        { 5, 13, L"자홍 샘플",   L"밝은 자홍 샘플" },
+        { 6, 14, L"청록 샘플",   L"밝은 청록 샘플" },
+        { 7, 15, L"흰색/회색 샘플", L"밝은 흰색 샘플" },
+        { 0, 8,  L"검정 샘플",   L"밝은 검정/회색 샘플" },
     };
 
+    // 미리보기 패널 폭이 좁아도 오른쪽 밝은 색 샘플이 잘리지 않도록
+    // 두 번째 컬럼 간격을 줄여서 그립니다.
     for (const auto& line : lines)
     {
-        SetTextColor(hdc, table[line.colorIndex]);
-        TextOutW(hdc, left, textY, line.text, (int)wcslen(line.text));
+        SetTextColor(hdc, table[line.normalIndex]);
+        TextOutW(hdc, left, textY, line.normalName, (int)wcslen(line.normalName));
+
+        SetTextColor(hdc, table[line.brightIndex]);
+        TextOutW(hdc, left + 145, textY, line.brightName, (int)wcslen(line.brightName));
+
         textY += 24;
     }
 
@@ -1033,6 +1044,9 @@ void ApplyStyles() {
 
     if (g_app->hwndShortcutBar)
         InvalidateRect(g_app->hwndShortcutBar, nullptr, TRUE);
+
+    // buildfix26: 이미 열려 있는 갈무리 보기 창도 메인 출력창 폰트를 즉시 따라가게 합니다.
+    ApplyTailWindowFonts();
 
     if (oldLog) DeleteObject(oldLog);
     if (oldInput) DeleteObject(oldInput);

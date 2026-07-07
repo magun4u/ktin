@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -7,6 +7,7 @@
 #include "theme.h"
 #include "resource.h"
 #include "settings.h"
+#include "log_tail.h"
 #include <commctrl.h>
 
 // ==============================================
@@ -250,15 +251,17 @@ void CreateMainMenu(HWND hwnd)
 
     HMENU hMenuPast = CreatePopupMenu();
     HMENU hMenuCur = CreatePopupMenu();
+    HMENU hMenuCapture = CreatePopupMenu();
+    HMENU hMenuTail = CreatePopupMenu();
 
     auto AddODItem = [](HMENU hMenu, UINT_PTR id, const wchar_t* text)
         {
-            AppendMenuW(hMenu, MF_OWNERDRAW | MF_STRING, id, text);
+            AppendMenuW(hMenu, MF_STRING, id, text);
         };
 
     auto AddODPopup = [](HMENU hMenu, HMENU hPopup, const wchar_t* text)
         {
-            AppendMenuW(hMenu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)hPopup, text);
+            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPopup, text);
         };
 
     AddODItem(hMenuFile, ID_MENU_FILE_QUICK_CONNECT, L"빠른 연결...\tAlt+Q");
@@ -275,8 +278,25 @@ void CreateMainMenu(HWND hwnd)
     AddODItem(hMenuCur, ID_MENU_EDIT_COPY_CUR, L"클립보드로 복사");
     AddODItem(hMenuCur, ID_MENU_EDIT_SAVE_CUR, L"파일로 저장...");
 
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_ALL, L"전체");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_CHAT, L"잡담");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_AUCTION, L"경매");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_TALK, L"대화");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_ITEM, L"아이템 획득");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_EXP, L"경험치");
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER1, GetTailModeMenuTitle(7).c_str());
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER2, GetTailModeMenuTitle(8).c_str());
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER3, GetTailModeMenuTitle(9).c_str());
+    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_CUSTOM, L"임시 문자열...");
+
+    // 갈무리 메뉴는 저장 켜기/끄기와 폴더 열기만 둡니다.
+    // 보기 창과 필터 설정은 보기 메뉴의 상위 항목으로 분리합니다.
+    AddODItem(hMenuCapture, ID_MENU_CAPTURE_TOGGLE, L"갈무리 꺼짐");
+    if (HasCaptureTailWindows())
+        AddODItem(hMenuCapture, ID_MENU_CAPTURE_CLOSE_ALL, L"갈무리창 모두 닫기");
+    AddODItem(hMenuCapture, ID_MENU_CAPTURE_OPEN_FOLDER, L"갈무리 폴더 열기");
+
     AddODItem(hMenuEdit, ID_MENU_FIND_DIALOG, L"찾기...\tCtrl+F");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_HIGHLIGHT, L"트리거 설정\tShift+F");
     AddODItem(hMenuEdit, ID_MENU_EDIT_VARIABLE, L"변수 설정(&V)...");
     AddODItem(hMenuEdit, ID_MENU_EDIT_ABBREVIATION, L"줄임말 설정(&B)...");
     AddODItem(hMenuEdit, ID_MENU_EDIT_FUNCTION_SHORTCUT, L"단축키 설정(&K)...");
@@ -288,21 +308,18 @@ void CreateMainMenu(HWND hwnd)
     AddODPopup(hMenuEdit, hMenuCur, L"현재 화면을");
 
     AddODItem(hMenuView, ID_MENU_VIEW_HIDE_MENU, L"메뉴 숨기기(&M)");
+    AddODPopup(hMenuView, hMenuCapture, L"갈무리(&L)");
+    AddODPopup(hMenuView, hMenuTail, L"갈무리 보기(&G)");
+    AddODItem(hMenuView, ID_MENU_CAPTURE_FILTER_SETTINGS, L"갈무리 필터 설정...");
     AddODItem(hMenuView, ID_MENU_THEME_DIALOG, L"ANSI 테마 선택...(&T)");
     AddODItem(hMenuView, ID_MENU_OPTIONS_FIT_WINDOW, L"화면 여백 없애기(&S)");
     AppendMenuW(hMenuView, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hMenuView, ID_MENU_OPTIONS_CHAT_DOCK, L"채팅 캡쳐창 분리(&D)");
-    AddODItem(hMenuView, ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE, L"채팅 캡쳐창 숨기기(&H)");
     AppendMenuW(hMenuView, MF_SEPARATOR, 0, nullptr);
     AddODItem(hMenuView, ID_MENU_VIEW_SYMBOLS, L"특수 기호...(&S)\tF4");
 
     AddODItem(hMenuOptions, ID_MENU_SETTINGS, L"환경 설정...(&O)");
-    AddODItem(hMenuOptions, ID_MENU_OPTIONS_CHAT_CAPTURE, L"채팅 캡처 패턴 설정...(&P)");
-    AppendMenuW(hMenuOptions, MF_SEPARATOR, 0, nullptr);
     AddODItem(hMenuOptions, ID_MENU_OPTIONS_SHORTCUTBAR, L"단축버튼 표시(&H)");
     AddODItem(hMenuOptions, ID_MENU_OPTIONS_KEEPALIVE_TOGGLE, L"접속 유지 켜기(&K)");
-    AddODItem(hMenuOptions, ID_MENU_OPTIONS_CHAT_TIME_TOGGLE, L"채팅 캡처에 시간 보기(&T)");
-    AddODItem(hMenuOptions, ID_MENU_OPTIONS_CAPTURE_LOG, L"갈무리 켜기(&L)");
 
     AddODItem(hMenuHelp, ID_MENU_HELP_SHORTCUT, L"단축키 도움말(&S)");
     AddODItem(hMenuHelp, ID_MENU_HELP_ABOUT, L"정보(&A)");

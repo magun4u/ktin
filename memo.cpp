@@ -43,6 +43,7 @@ struct MemoColWidthState {
 };
 
 static void MemoRebuildRecentMenu(HWND hwnd);
+static bool HandleMemoShortcutKey(UINT msg, WPARAM wParam);
 
 static LineSet g_lineSets[] = 
 {
@@ -1788,6 +1789,12 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         if (wParam == ID_TIMER_MEMO_AUTOSAVE) { MemoAutoSave(); return 0; }
         break;
 
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN:
+        if (HandleMemoShortcutKey(msg, wParam))
+            return 0;
+        break;
+
     case WM_COMMAND:
     {
         switch (LOWORD(wParam))
@@ -2456,9 +2463,140 @@ static void DrawMemoFormatMarks(HWND hwnd)
     ReleaseDC(hwnd, hdc);
 }
 
+
+// ==============================================
+// 메모장 단축키 처리
+// 메뉴에 "\tCtrl+..." 라고 표시하는 것만으로는 RichEdit 포커스 상태에서
+// 실제 단축키가 동작하지 않는다. RichEdit가 키를 먼저 먹기 때문에 여기서
+// 메모장 메뉴 명령으로 직접 변환한다.
+// ==============================================
+static bool HandleMemoShortcutKey(UINT msg, WPARAM wParam)
+{
+    if (!g_memo.hwnd || !IsWindow(g_memo.hwnd))
+        return false;
+
+    bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+    bool alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+
+    auto DoCmd = [](int id) -> bool {
+        SendMessageW(g_memo.hwnd, WM_COMMAND, id, 0);
+        return true;
+    };
+
+    // Alt 계열은 WM_SYSKEYDOWN으로 들어온다.
+    if (msg == WM_SYSKEYDOWN && alt && !ctrl)
+    {
+        switch ((int)wParam)
+        {
+        case 'G': return DoCmd(ID_MEMO_EXIT_TO_TINTIN);
+        case 'D': return DoCmd(ID_MEMO_DRAW_TOGGLE);
+        case 'Y': return DoCmd(ID_MEMO_EDIT_DEL_END);
+        }
+    }
+
+    if (msg != WM_KEYDOWN)
+        return false;
+
+    // 단독 기능키
+    if (!ctrl && !alt && !shift)
+    {
+        switch ((int)wParam)
+        {
+        case VK_F4:     return DoCmd(ID_MENU_VIEW_SYMBOLS);
+        case VK_F3:     return DoCmd(ID_MEMO_EDIT_FIND_NEXT);
+        case VK_ESCAPE: return DoCmd(ID_MEMO_FILE_EXIT);
+        case VK_DELETE: return DoCmd(ID_MEMO_EDIT_DELETE);
+        }
+    }
+
+    if (!ctrl && !alt && shift)
+    {
+        if (wParam == VK_F3) return DoCmd(ID_MEMO_EDIT_FIND_PREV);
+    }
+
+    // Ctrl 조합
+    if (ctrl && !alt)
+    {
+        if (!shift)
+        {
+            switch ((int)wParam)
+            {
+            case 'O': return DoCmd(ID_MEMO_FILE_OPEN);
+            case 'S': return DoCmd(ID_MEMO_FILE_SAVE);
+            case 'Z': return DoCmd(ID_MEMO_EDIT_UNDO);
+            case 'Y': return DoCmd(ID_MEMO_EDIT_REDO);
+            case 'X': return DoCmd(ID_MEMO_EDIT_CUT);
+            case 'C': return DoCmd(ID_MEMO_EDIT_COPY);
+            case 'V': return DoCmd(ID_MEMO_EDIT_PASTE);
+            case 'A': return DoCmd(ID_MEMO_EDIT_SELECTALL);
+            case 'F': return DoCmd(ID_MEMO_EDIT_FIND);
+            case 'H': return DoCmd(ID_MEMO_EDIT_REPLACE);
+            case 'G': return DoCmd(ID_MEMO_EDIT_GOTO);
+            case 'R': return DoCmd(ID_MEMO_REPEAT_SYMBOL);
+            case 'L': return DoCmd(ID_MEMO_EDIT_DEL_LINE);
+            case VK_HOME:   return DoCmd(ID_MEMO_EDIT_DOC_START);
+            case VK_END:    return DoCmd(ID_MEMO_EDIT_DOC_END);
+            case VK_PRIOR:  return DoCmd(ID_MEMO_EDIT_SCR_START);
+            case VK_NEXT:   return DoCmd(ID_MEMO_EDIT_SCR_END);
+            case VK_BACK:   return DoCmd(ID_MEMO_EDIT_DEL_WORD_LEFT);
+            case VK_DELETE: return DoCmd(ID_MEMO_EDIT_DEL_WORD_RIGHT);
+            }
+        }
+        else
+        {
+            if (wParam == 'S') return DoCmd(ID_MEMO_FILE_SAVEAS);
+        }
+    }
+
+    return false;
+}
+
 static LRESULT CALLBACK MemoEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
+    if (HandleMemoShortcutKey(msg, wParam))
+        return 0;
+
+    // 그리기 모드에서는 RichEdit가 방향키를 먼저 처리하기 전에 가로채야 합니다.
+    // 이전 안전판에서는 DefSubclassProc()를 먼저 호출해서 커서만 이동하고
+    // MemoDrawStep()/MemoBrushStep()가 실행되지 않았습니다.
+    if (msg == WM_KEYDOWN && g_memo.drawMode)
+    {
+        int dx = 0;
+        int dy = 0;
+
+        switch (wParam)
+        {
+        case VK_LEFT:  dx = -1; break;
+        case VK_RIGHT: dx =  1; break;
+        case VK_UP:    dy = -1; break;
+        case VK_DOWN:  dy =  1; break;
+        default:
+            break;
+        }
+
+        if (dx != 0 || dy != 0)
+        {
+            if (MemoIsLineBrush(g_memo.selectedSymbol))
+                MemoDrawStep(hwnd, dx, dy);
+            else
+                MemoBrushStep(hwnd, dx, dy);
+
+            return 0;
+        }
+    }
+
+    // 메모장 편집창에 포커스가 있을 때도 Alt+D로 그리기 모드를 켜고 끌 수 있게 합니다.
+    if (msg == WM_SYSKEYDOWN && wParam == L'D')
+    {
+        g_memo.drawMode = !g_memo.drawMode;
+        if (g_memo.hwnd)
+            UpdateMemoMenuState(g_memo.hwnd);
+        UpdateMemoStatus();
+        return 0;
+    }
+
     LRESULT lr = DefSubclassProc(hwnd, msg, wParam, lParam);
 
     switch (msg)
@@ -2701,9 +2839,10 @@ static void MemoRebuildRecentMenu(HWND hwnd)
     if (!g_memo.recentFiles.empty()) {
         AppendMenuW(hFile, MF_SEPARATOR, ID_MEMO_RECENT_BASE + 10, nullptr);
         for (int i = 0; i < (int)g_memo.recentFiles.size() && i < 5; ++i) {
-            s_recentItems[i] = L"&" + std::to_wstring(i + 1) + L"\t" + g_memo.recentFiles[i];
-            // 보관함에 담긴 문자열의 주소를 넘깁니다.
-            AppendMenuW(hFile, MF_OWNERDRAW | MF_STRING, ID_MEMO_RECENT_BASE + i, s_recentItems[i].c_str());
+            // 	 를 넣으면 Windows 메뉴가 왼쪽/오른쪽 단축키 영역처럼 나누어 그리므로
+            // "1" 다음에 파일명이 멀리 떨어져 보인다. 최근 파일은 일반 문자열로 붙여서 표시한다.
+            s_recentItems[i] = L"&" + std::to_wstring(i + 1) + L". " + g_memo.recentFiles[i];
+            AppendMenuW(hFile, MF_STRING, ID_MEMO_RECENT_BASE + i, s_recentItems[i].c_str());
         }
     }
     DrawMenuBar(hwnd);

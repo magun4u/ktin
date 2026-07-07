@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -49,7 +49,6 @@ void UpdateSettingPreviews(HWND hwnd) {
     wchar_t buf[256];
     const wchar_t* logFace = g_app->useCustomMudFont ? L"Mud둥근모" : g_app->logStyle.font.lfFaceName;
     const wchar_t* inpFace = g_app->useCustomMudFont ? L"Mud둥근모" : g_app->inputStyle.font.lfFaceName;
-    const wchar_t* chatFace = g_app->useCustomMudFont ? L"Mud둥근모" : g_app->chatStyle.font.lfFaceName;
 
     wsprintfW(buf, L"폰트: %s (%dpt)", g_app->logStyle.font.lfFaceName, GetFontPointSizeFromLogFont(g_app->logStyle.font));
     SetWindowTextW(GetDlgItem(hwnd, ID_SET_PREVIEW_LOG_INFO), buf);
@@ -57,15 +56,11 @@ void UpdateSettingPreviews(HWND hwnd) {
     wsprintfW(buf, L"폰트: %s (%dpt)", g_app->inputStyle.font.lfFaceName, GetFontPointSizeFromLogFont(g_app->inputStyle.font));
     SetWindowTextW(GetDlgItem(hwnd, ID_SET_PREVIEW_INP_INFO), buf);
 
-    wsprintfW(buf, L"폰트: %s (%dpt)", g_app->chatStyle.font.lfFaceName, GetFontPointSizeFromLogFont(g_app->chatStyle.font));
-    SetWindowTextW(GetDlgItem(hwnd, ID_SET_PREVIEW_CHAT_INFO), buf);
 
     InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_LOG_TEXT), nullptr, TRUE);
     InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_LOG_BACK), nullptr, TRUE);
     InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_INP_TEXT), nullptr, TRUE);
     InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_INP_BACK), nullptr, TRUE);
-    InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_CHAT_TEXT), nullptr, TRUE);
-    InvalidateRect(GetDlgItem(hwnd, ID_SET_PREVIEW_CHAT_BACK), nullptr, TRUE);
 }
 
 void SwitchSettingsPane(SettingsDlgState* state, int index) {
@@ -138,47 +133,47 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         AddToPanel(0, CreateWindowExW(0, L"STATIC", L"화면 세로줄 수:", WS_CHILD, 185, 75, 100, 20, hwnd, nullptr, hInst, nullptr));
         HWND hEditRows = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 300, 72, 60, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_ROWS, hInst, nullptr);
         AddToPanel(0, hEditRows);
-        HWND hChkSmooth = CreateWindowExW(0, L"BUTTON", L"폰트 부드럽게 표시 (ClearType)", WS_CHILD | BS_AUTOCHECKBOX, 185, 115, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_SMOOTH, hInst, nullptr);
+
+        AddToPanel(0, CreateWindowExW(0, L"BUTTON", L"화면 여백 설정(px)", WS_CHILD | BS_GROUPBOX, 185, 105, 370, 58, hwnd, nullptr, hInst, nullptr));
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"왼쪽:", WS_CHILD, 198, 128, 42, 18, hwnd, nullptr, hInst, nullptr));
+        HWND hMarginL = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 238, 124, 42, 22, hwnd, (HMENU)(INT_PTR)ID_SET_MARGIN_LEFT, hInst, nullptr);
+        AddToPanel(0, hMarginL);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"오른쪽:", WS_CHILD, 286, 128, 52, 18, hwnd, nullptr, hInst, nullptr));
+        HWND hMarginR = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 340, 124, 42, 22, hwnd, (HMENU)(INT_PTR)ID_SET_MARGIN_RIGHT, hInst, nullptr);
+        AddToPanel(0, hMarginR);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"위:", WS_CHILD, 390, 128, 26, 18, hwnd, nullptr, hInst, nullptr));
+        HWND hMarginT = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 417, 124, 42, 22, hwnd, (HMENU)(INT_PTR)ID_SET_MARGIN_TOP, hInst, nullptr);
+        AddToPanel(0, hMarginT);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"아래:", WS_CHILD, 467, 128, 42, 18, hwnd, nullptr, hInst, nullptr));
+        HWND hMarginB = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 510, 124, 42, 22, hwnd, (HMENU)(INT_PTR)ID_SET_MARGIN_BOTTOM, hInst, nullptr);
+        AddToPanel(0, hMarginB);
+
+        HWND hChkSmooth = CreateWindowExW(0, L"BUTTON", L"폰트 부드럽게 표시 (ClearType)", WS_CHILD | BS_AUTOCHECKBOX, 185, 170, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_SMOOTH, hInst, nullptr);
         AddToPanel(0, hChkSmooth);
 
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"화면 정렬:", WS_CHILD, 185, 155, 80, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hAlignL = CreateWindowExW(0, L"BUTTON", L"왼쪽", WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP, 270, 153, 60, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_LEFT, hInst, nullptr);
-        HWND hAlignC = CreateWindowExW(0, L"BUTTON", L"중앙", WS_CHILD | BS_AUTORADIOBUTTON, 335, 153, 60, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_CENTER, hInst, nullptr);
-        HWND hAlignR = CreateWindowExW(0, L"BUTTON", L"오른쪽", WS_CHILD | BS_AUTORADIOBUTTON, 400, 153, 70, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_RIGHT, hInst, nullptr);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"화면 정렬:", WS_CHILD, 185, 205, 80, 20, hwnd, nullptr, hInst, nullptr));
+        HWND hAlignL = CreateWindowExW(0, L"BUTTON", L"왼쪽", WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP, 270, 203, 60, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_LEFT, hInst, nullptr);
+        HWND hAlignC = CreateWindowExW(0, L"BUTTON", L"중앙", WS_CHILD | BS_AUTORADIOBUTTON, 335, 203, 60, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_CENTER, hInst, nullptr);
+        HWND hAlignR = CreateWindowExW(0, L"BUTTON", L"오른쪽", WS_CHILD | BS_AUTORADIOBUTTON, 400, 203, 70, 24, hwnd, (HMENU)(UINT_PTR)ID_SET_ALIGN_RIGHT, hInst, nullptr);
         AddToPanel(0, hAlignL); AddToPanel(0, hAlignC); AddToPanel(0, hAlignR);
 
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"도킹 시 채팅 캡쳐창 줄 수:", WS_CHILD, 185, 195, 150, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hEditChatLines = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_NUMBER, 340, 192, 60, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_CHAT_LINES, hInst, nullptr);
-        AddToPanel(0, hEditChatLines);
-
-        HWND hChkChatTime = CreateWindowExW(0, L"BUTTON", L"채팅 캡쳐에 시간 출력 사용", WS_CHILD | BS_AUTOCHECKBOX, 185, 230, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_CHAT_TIME, hInst, nullptr);
-        AddToPanel(0, hChkChatTime);
-
-        // 자동 로그인 UI
-        int alY = 265;
-        HWND hChkAutoLogin = CreateWindowExW(0, L"BUTTON", L"자동 로그인 사용", WS_CHILD | BS_AUTOCHECKBOX, 185, alY, 150, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_AUTOLOGIN, hInst, nullptr);
-        AddToPanel(0, hChkAutoLogin);
-
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"아이디 패턴:", WS_CHILD, 185, alY + 33, 80, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hEditAlIdPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 265, alY + 30, 160, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_ID_PAT, hInst, nullptr);
+        int alY = 245;
+        HWND hChkAL = CreateWindowExW(0, L"BUTTON", L"접속 후 60초 자동 로그인 패턴 검사", WS_CHILD | BS_AUTOCHECKBOX,
+            185, alY, 310, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_AUTOLOGIN, hInst, nullptr);
+        AddToPanel(0, hChkAL);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"아이디 패턴:", WS_CHILD, 185, alY + 32, 90, 20, hwnd, nullptr, hInst, nullptr));
+        HWND hEditAlIdPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 275, alY + 28, 135, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_ID_PAT, hInst, nullptr);
         AddToPanel(0, hEditAlIdPat);
-
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"아이디:", WS_CHILD, 430, alY + 33, 45, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hEditAlId = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 480, alY + 30, 80, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_ID, hInst, nullptr);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"아이디:", WS_CHILD, 415, alY + 32, 55, 20, hwnd, nullptr, hInst, nullptr));
+        HWND hEditAlId = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 465, alY + 28, 90, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_ID, hInst, nullptr);
         AddToPanel(0, hEditAlId);
-
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"비번 패턴:", WS_CHILD, 185, alY + 63, 80, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hEditAlPwPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 265, alY + 60, 160, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_PW_PAT, hInst, nullptr);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"비번 패턴:", WS_CHILD, 185, alY + 62, 90, 20, hwnd, nullptr, hInst, nullptr));
+        HWND hEditAlPwPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 275, alY + 58, 135, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_PW_PAT, hInst, nullptr);
         AddToPanel(0, hEditAlPwPat);
-
-        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"비밀번호:", WS_CHILD, 430, alY + 63, 60, 20, hwnd, nullptr, hInst, nullptr));
-        HWND hEditAlPw = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD, 480, alY + 60, 80, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_PW, hInst, nullptr);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"비번:", WS_CHILD, 415, alY + 62, 55, 20, hwnd, nullptr, hInst, nullptr));
+        HWND hEditAlPw = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL | ES_PASSWORD, 465, alY + 58, 90, 24, hwnd, (HMENU)(INT_PTR)ID_SET_EDIT_AL_PW, hInst, nullptr);
         AddToPanel(0, hEditAlPw);
-
-        HWND hAlHint1 = CreateWindowExW(0, L"STATIC", L"※ 안내: 주소록 접속 시, 주소록의 [개별 자동 로그인]이", WS_CHILD | WS_VISIBLE, 185, alY + 95, 380, 18, hwnd, nullptr, hInst, nullptr);
-        HWND hAlHint2 = CreateWindowExW(0, L"STATIC", L"            체크되어 있으면 이곳의 기본(전역) 설정 대신", WS_CHILD | WS_VISIBLE, 185, alY + 117, 380, 18, hwnd, nullptr, hInst, nullptr);
-        HWND hAlHint3 = CreateWindowExW(0, L"STATIC", L"            해당 주소록에 등록된 계정 정보가 우선 사용됩니다.", WS_CHILD | WS_VISIBLE, 185, alY + 139, 380, 18, hwnd, nullptr, hInst, nullptr);
-        AddToPanel(0, hAlHint1); AddToPanel(0, hAlHint2); AddToPanel(0, hAlHint3);
+        AddToPanel(0, CreateWindowExW(0, L"STATIC", L"※ 접속 후 60초만 검사하고 아이디/비번 전송 후 즉시 OFF", WS_CHILD, 185, alY + 95, 395, 20, hwnd, nullptr, hInst, nullptr));
 
         if (g_app->termAlign == 0) SendMessageW(hAlignL, BM_SETCHECK, BST_CHECKED, 0);
         else if (g_app->termAlign == 2) SendMessageW(hAlignR, BM_SETCHECK, BST_CHECKED, 0);
@@ -213,16 +208,7 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         AddToPanel(1, CreateWindowExW(0, L"STATIC", L"배경색:", WS_CHILD, startX + 95, inpY + 85, 55, 20, hwnd, nullptr, hInst, nullptr));
         AddToPanel(1, CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"", WS_CHILD | SS_NOTIFY, startX + 150, inpY + 85, 18, 18, hwnd, (HMENU)(INT_PTR)ID_SET_PREVIEW_INP_BACK, hInst, nullptr));
 
-        int chatY = 355;
-        AddToPanel(1, CreateWindowExW(0, L"BUTTON", L"채팅 캡쳐창 설정", WS_CHILD | BS_GROUPBOX, startX - 5, chatY, groupW, 140, hwnd, nullptr, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"BUTTON", L"폰트 변경...", WS_CHILD, startX, chatY + 20, 150, 30, hwnd, (HMENU)(INT_PTR)ID_SET_BTN_CHAT_FONT, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"BUTTON", L"글자색 변경...", WS_CHILD, nextX, chatY + 20, 150, 30, hwnd, (HMENU)(INT_PTR)ID_SET_BTN_CHAT_COLOR, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"BUTTON", L"배경색 변경...", WS_CHILD, nextX, chatY + 60, 150, 30, hwnd, (HMENU)(INT_PTR)ID_SET_BTN_CHAT_BG, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"STATIC", L"폰트: -", WS_CHILD, startX + 5, chatY + 60, 205, 20, hwnd, (HMENU)(INT_PTR)ID_SET_PREVIEW_CHAT_INFO, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"STATIC", L"글자색:", WS_CHILD, startX + 5, chatY + 85, 55, 20, hwnd, nullptr, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"", WS_CHILD | SS_NOTIFY, startX + 60, chatY + 85, 18, 18, hwnd, (HMENU)(INT_PTR)ID_SET_PREVIEW_CHAT_TEXT, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(0, L"STATIC", L"배경색:", WS_CHILD, startX + 95, chatY + 85, 55, 20, hwnd, nullptr, hInst, nullptr));
-        AddToPanel(1, CreateWindowExW(WS_EX_STATICEDGE, L"STATIC", L"", WS_CHILD | SS_NOTIFY, startX + 150, chatY + 85, 18, 18, hwnd, (HMENU)(INT_PTR)ID_SET_PREVIEW_CHAT_BACK, hInst, nullptr));
+        // 채팅 캡처창 설정은 안정성 버전에서 제거했습니다.
 
         // --- 패널 2: 접속유지 ---
         HWND hChkKA = CreateWindowExW(0, L"BUTTON", L"접속 유지 사용", WS_CHILD | BS_AUTOCHECKBOX, 185, 40, 150, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_KA_ENABLE, hInst, nullptr);
@@ -238,8 +224,6 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         // --- 패널 3: 기타 ---
         HWND hChkSaveInp = CreateWindowExW(0, L"BUTTON", L"종료 시 입력창 내용 저장", WS_CHILD | BS_AUTOCHECKBOX, 185, 40, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_SAVE_INP, hInst, nullptr);
         AddToPanel(3, hChkSaveInp);
-        HWND hChkCapture = CreateWindowExW(0, L"BUTTON", L"갈무리 켜기", WS_CHILD | BS_AUTOCHECKBOX, 185, 75, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_CAPTURE, hInst, nullptr);
-        AddToPanel(3, hChkCapture);
         HWND hChkAutoQuick = CreateWindowExW(0, L"BUTTON", L"프로그램 실행 시 빠른 연결 띄우기", WS_CHILD | BS_AUTOCHECKBOX, 185, 110, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_AUTO_QUICK, hInst, nullptr);
         AddToPanel(3, hChkAutoQuick);
         HWND hChkAutoAddr = CreateWindowExW(0, L"BUTTON", L"프로그램 실행 시 주소록 띄우기", WS_CHILD | BS_AUTOCHECKBOX, 185, 145, 250, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_AUTO_ADDR, hInst, nullptr);
@@ -254,6 +238,10 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         // ★ 모호한 동아시아 문자 폭 옵션 (소리 체크박스 바로 아래에 배치)
         HWND hChkAmbiguous = CreateWindowExW(0, L"BUTTON", L"모호한 동아시아 문자 폭을 넓게 처리", WS_CHILD | BS_AUTOCHECKBOX | WS_VISIBLE, 185, 280, 300, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_AMBIGUOUS_WIDE, hInst, nullptr);
         AddToPanel(3, hChkAmbiguous);
+        HWND hChkMainTopmost = CreateWindowExW(0, L"BUTTON", L"메인창 항상 위", WS_CHILD | BS_AUTOCHECKBOX, 185, 310, 300, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_MAIN_TOPMOST, hInst, nullptr);
+        AddToPanel(3, hChkMainTopmost);
+        HWND hChkTailSnap = CreateWindowExW(0, L"BUTTON", L"갈무리창 자동 붙기", WS_CHILD | BS_AUTOCHECKBOX, 185, 340, 300, 24, hwnd, (HMENU)(INT_PTR)ID_SET_CHK_TAIL_SNAP, hInst, nullptr);
+        AddToPanel(3, hChkTailSnap);
 
         // --- 패널 4: 단축버튼 ---
         AddToPanel(4, CreateWindowExW(0, L"STATIC", L"라벨", WS_CHILD, 210, 30, 70, 20, hwnd, nullptr, hInst, nullptr));
@@ -280,18 +268,17 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
         // 초기값 설정
         wchar_t b[32];
-        wchar_t cBuf[32]; wsprintfW(cBuf, L"%d", g_app->chatDockedLines); SetWindowTextW(hEditChatLines, cBuf);
-
-        SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_CHAT_TIME), BM_SETCHECK, g_app->chatTimestampEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
-
         wsprintfW(b, L"%d", g_app->screenCols); SetWindowTextW(hEditCols, b);
         wsprintfW(b, L"%d", g_app->screenRows); SetWindowTextW(hEditRows, b);
+        wsprintfW(b, L"%d", g_app->termMarginLeft); SetWindowTextW(hMarginL, b);
+        wsprintfW(b, L"%d", g_app->termMarginRight); SetWindowTextW(hMarginR, b);
+        wsprintfW(b, L"%d", g_app->termMarginTop); SetWindowTextW(hMarginT, b);
+        wsprintfW(b, L"%d", g_app->termMarginBottom); SetWindowTextW(hMarginB, b);
         SendMessageW(hChkSmooth, BM_SETCHECK, g_app->smoothFontEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(hChkKA, BM_SETCHECK, g_app->keepAliveEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
         wsprintfW(b, L"%d", g_app->keepAliveIntervalSec); SetWindowTextW(hEditKAInt, b);
         SetWindowTextW(hEditKACmd, g_app->keepAliveCommand.c_str());
         SendMessageW(hChkSaveInp, BM_SETCHECK, g_app->saveInputOnExit ? BST_CHECKED : BST_UNCHECKED, 0);
-        SendMessageW(hChkCapture, BM_SETCHECK, g_app->captureLogEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
         SendMessageW(hChkAutoQuick, BM_SETCHECK, g_app->autoShowQuickConnect ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(hChkAutoAddr, BM_SETCHECK, g_app->autoShowAddressBook ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -300,6 +287,8 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_CLOSE_TRAY), BM_SETCHECK, g_app->closeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_SOUND_ENABLE), BM_SETCHECK, g_app->soundEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(hChkAmbiguous, BM_SETCHECK, g_app->ambiguousEastAsianWide ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_MAIN_TOPMOST), BM_SETCHECK, g_app->mainAlwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_TAIL_SNAP), BM_SETCHECK, g_app->tailSnapEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
         SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AUTOLOGIN), BM_SETCHECK, g_app->autoLoginEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
         SetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_ID_PAT), g_app->autoLoginIdPattern.c_str());
@@ -427,15 +416,6 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
                 if (g_app->hwndInput) { InvalidateRect(g_app->hwndInput, nullptr, TRUE); UpdateWindow(g_app->hwndInput); }
             }
         }
-        else if (id == ID_SET_BTN_CHAT_FONT) {
-            if (ChooseFontOnly(hwnd, g_app->chatStyle.font)) { ApplyStyles(); UpdateSettingPreviews(hwnd); }
-        }
-        else if (id == ID_SET_BTN_CHAT_COLOR) {
-            if (ChooseColorOnly(hwnd, g_app->chatStyle.textColor)) { ApplyStyles(); UpdateSettingPreviews(hwnd); }
-        }
-        else if (id == ID_SET_BTN_CHAT_BG) {
-            if (ChooseBackgroundColor(hwnd, g_app->chatStyle.backColor)) { ApplyStyles(); UpdateSettingPreviews(hwnd); }
-        }
         else if (id == ID_SET_CHK_AMBIGUOUS_WIDE && HIWORD(wParam) == BN_CLICKED) {
             g_app->ambiguousEastAsianWide = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AMBIGUOUS_WIDE), BM_GETCHECK, 0, 0) == BST_CHECKED);
             if (g_app->hwndLog) {
@@ -453,21 +433,29 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
             if (newCols >= 20 && newCols <= 300) g_app->screenCols = newCols;
             if (newRows >= 5 && newRows <= 200) g_app->screenRows = newRows;
 
-            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_CHAT_LINES), buf, 256);
-            int newChatLines = _wtoi(buf);
-            if (newChatLines >= 1 && newChatLines <= 50) g_app->chatDockedLines = newChatLines;
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_MARGIN_LEFT), buf, 256);
+            g_app->termMarginLeft = min(200, max(0, _wtoi(buf)));
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_MARGIN_RIGHT), buf, 256);
+            g_app->termMarginRight = min(200, max(0, _wtoi(buf)));
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_MARGIN_TOP), buf, 256);
+            g_app->termMarginTop = min(200, max(0, _wtoi(buf)));
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_MARGIN_BOTTOM), buf, 256);
+            g_app->termMarginBottom = min(200, max(0, _wtoi(buf)));
 
-            g_app->chatTimestampEnabled = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_CHAT_TIME), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            g_app->chatDockedLines = 0;
+            g_app->chatTimestampEnabled = false;
+
             g_app->autoLoginEnabled = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AUTOLOGIN), BM_GETCHECK, 0, 0) == BST_CHECKED);
-
-            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_ID_PAT), buf, 256);
-            g_app->autoLoginIdPattern = Trim(buf);
-            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_ID), buf, 256);
-            g_app->autoLoginId = Trim(buf);
-            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_PW_PAT), buf, 256);
-            g_app->autoLoginPwPattern = Trim(buf);
-            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_PW), buf, 256);
-            g_app->autoLoginPw = Trim(buf);
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_ID_PAT), buf, 1024); g_app->autoLoginIdPattern = Trim(buf);
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_ID), buf, 1024); g_app->autoLoginId = Trim(buf);
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_PW_PAT), buf, 1024); g_app->autoLoginPwPattern = Trim(buf);
+            GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_AL_PW), buf, 1024); g_app->autoLoginPw = Trim(buf);
+            g_app->autoLoginSuccessPattern1.clear();
+            g_app->autoLoginSuccessPattern2.clear();
+            g_app->autoLoginSuccessPattern3.clear();
+            g_app->autoLoginFailPattern1.clear();
+            g_app->autoLoginFailPattern2.clear();
+            g_app->autoLoginFailPattern3.clear();
             SaveAutoLoginSettings();
 
             if (SendMessageW(GetDlgItem(hwnd, ID_SET_ALIGN_LEFT), BM_GETCHECK, 0, 0) == BST_CHECKED) g_app->termAlign = 0;
@@ -497,17 +485,20 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
             g_app->soundEnabled = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_SOUND_ENABLE), BM_GETCHECK, 0, 0) == BST_CHECKED);
             // ★ 새로 추가: 모호한 동아시아 문자 폭 옵션
             g_app->ambiguousEastAsianWide = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AMBIGUOUS_WIDE), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            g_app->mainAlwaysOnTop = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_MAIN_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            g_app->tailSnapEnabled = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_TAIL_SNAP), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            if (g_app->hwndMain)
+            {
+                SetWindowPos(g_app->hwndMain, g_app->mainAlwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST,
+                    0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            SaveScreenSizeSettings();
             SaveGeneralSettings();
             g_app->autoShowQuickConnect = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AUTO_QUICK), BM_GETCHECK, 0, 0) == BST_CHECKED);
             g_app->autoShowAddressBook = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AUTO_ADDR), BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-            bool capLog = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_CAPTURE), BM_GETCHECK, 0, 0) == BST_CHECKED);
-            if (capLog != g_app->captureLogEnabled) {
-                g_app->captureLogEnabled = capLog;
-                if (capLog) StartCaptureLog();
-                else StopCaptureLog();
-                UpdateMenuToggleStates();
-            }
+            // buildfix33: 환경설정 적용은 갈무리 켜짐/꺼짐 상태를 바꾸지 않습니다.
+            // 갈무리는 보기 → 갈무리 → 갈무리 켜짐/꺼짐 메뉴에서만 제어합니다.
 
             for (int i = 0; i < 10; ++i) {
                 GetWindowTextW(GetDlgItem(hwnd, ID_SET_EDIT_SCLABEL_BASE + i), buf, 256);
@@ -760,6 +751,14 @@ void LoadScreenSizeSettings()
     if (g_app->screenCols > 300) g_app->screenCols = 300;
     if (g_app->screenRows < 5) g_app->screenRows = 5;
     if (g_app->screenRows > 200) g_app->screenRows = 200;
+    g_app->termMarginLeft = GetPrivateProfileIntW(L"screen_size", L"margin_left", 0, path.c_str());
+    g_app->termMarginRight = GetPrivateProfileIntW(L"screen_size", L"margin_right", 0, path.c_str());
+    g_app->termMarginTop = GetPrivateProfileIntW(L"screen_size", L"margin_top", 0, path.c_str());
+    g_app->termMarginBottom = GetPrivateProfileIntW(L"screen_size", L"margin_bottom", 0, path.c_str());
+    g_app->termMarginLeft = min(200, max(0, g_app->termMarginLeft));
+    g_app->termMarginRight = min(200, max(0, g_app->termMarginRight));
+    g_app->termMarginTop = min(200, max(0, g_app->termMarginTop));
+    g_app->termMarginBottom = min(200, max(0, g_app->termMarginBottom));
 }
 
 void SaveScreenSizeSettings()
@@ -771,6 +770,14 @@ void SaveScreenSizeSettings()
     WritePrivateProfileStringW(L"screen_size", L"cols", buf, path.c_str());
     wsprintfW(buf, L"%d", g_app->screenRows);
     WritePrivateProfileStringW(L"screen_size", L"rows", buf, path.c_str());
+    wsprintfW(buf, L"%d", g_app->termMarginLeft);
+    WritePrivateProfileStringW(L"screen_size", L"margin_left", buf, path.c_str());
+    wsprintfW(buf, L"%d", g_app->termMarginRight);
+    WritePrivateProfileStringW(L"screen_size", L"margin_right", buf, path.c_str());
+    wsprintfW(buf, L"%d", g_app->termMarginTop);
+    WritePrivateProfileStringW(L"screen_size", L"margin_top", buf, path.c_str());
+    wsprintfW(buf, L"%d", g_app->termMarginBottom);
+    WritePrivateProfileStringW(L"screen_size", L"margin_bottom", buf, path.c_str());
 }
 
 static LRESULT CALLBACK ScreenSizePopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -900,6 +907,10 @@ void LoadWindowSettings(HWND hwnd)
     g_app->termAlign = GetPrivateProfileIntW(L"window", L"align", 0, path.c_str());
     if (g_app->termAlign < 0 || g_app->termAlign > 2) g_app->termAlign = 0;
 
+    // 안전판 기본값: 실행 직후에는 상단 메뉴를 반드시 보이게 합니다.
+    // 우클릭 메뉴의 "상단 메뉴 보이기"도 함께 동작합니다.
+    g_app->menuHidden = false;
+
     g_app->autoShowQuickConnect = GetPrivateProfileIntW(L"startup", L"quick_connect", 0, path.c_str()) != 0;
     g_app->autoShowAddressBook = GetPrivateProfileIntW(L"startup", L"address_book", 0, path.c_str()) != 0;
     g_app->closeToTray = GetPrivateProfileIntW(L"window", L"close_to_tray", 0, path.c_str()) != 0;
@@ -929,6 +940,10 @@ void LoadWindowSettings(HWND hwnd)
         wchar_t keyA[32]; wsprintfW(keyA, L"align_%d", i);
         g_app->statusAligns[i] = GetPrivateProfileIntW(L"statusbar", keyA, 0, path.c_str());
     }
+
+    // 상태바 설정이 비어 있으면 실제로 보이지 않는 것처럼 보이므로 기본 문구를 넣습니다.
+    if (g_app->statusFormats[0].empty())
+        g_app->statusFormats[0] = L"KTin 준비";
 
     if (maximized) ShowWindow(hwnd, SW_MAXIMIZE);
 }
@@ -991,6 +1006,7 @@ void SaveWindowSettings(HWND hwnd)
     wsprintfW(buf, L"%ld", g_app->inputStyle.font.lfHeight); WritePrivateProfileStringW(L"font", L"input_height", buf, path.c_str());
     wsprintfW(buf, L"%ld", g_app->inputStyle.font.lfWeight); WritePrivateProfileStringW(L"font", L"input_weight", buf, path.c_str());
 
+    wsprintfW(buf, L"%d", g_app->statusPartCount);
     WritePrivateProfileStringW(L"statusbar", L"count", buf, path.c_str());
     for (int i = 0; i < 5; ++i) {
         // ★ 누락되었던 상태바 텍스트 양식(format) 저장 코드 복구!
@@ -1157,72 +1173,87 @@ void RebuildInputBrushes()
 void SaveAutoLoginSettings() {
     if (!g_app) return;
     std::wstring path = GetSettingsPath();
-
     WritePrivateProfileStringW(L"autologin", L"enabled", g_app->autoLoginEnabled ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"autologin", L"id_pattern", g_app->autoLoginIdPattern.c_str(), path.c_str());
     WritePrivateProfileStringW(L"autologin", L"id", g_app->autoLoginId.c_str(), path.c_str());
     WritePrivateProfileStringW(L"autologin", L"pw_pattern", g_app->autoLoginPwPattern.c_str(), path.c_str());
     WritePrivateProfileStringW(L"autologin", L"pw", g_app->autoLoginPw.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"success1", g_app->autoLoginSuccessPattern1.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"success2", g_app->autoLoginSuccessPattern2.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"success3", g_app->autoLoginSuccessPattern3.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"fail1", g_app->autoLoginFailPattern1.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"fail2", g_app->autoLoginFailPattern2.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"autologin", L"fail3", g_app->autoLoginFailPattern3.c_str(), path.c_str());
 }
 
 void LoadAutoLoginSettings() {
     if (!g_app) return;
     std::wstring path = GetSettingsPath();
-    wchar_t buf[256] = {};
+    wchar_t buf[1024] = {};
 
-    g_app->autoLoginEnabled = GetPrivateProfileIntW(L"autologin", L"enabled", 0, path.c_str()) != 0;
+    g_app->autoLoginEnabled = GetPrivateProfileIntW(L"autologin", L"enabled", 0, path.c_str()) ? true : false;
+    GetPrivateProfileStringW(L"autologin", L"id_pattern", L"아이디:", buf, 1024, path.c_str()); g_app->autoLoginIdPattern = buf;
+    GetPrivateProfileStringW(L"autologin", L"id", L"", buf, 1024, path.c_str()); g_app->autoLoginId = buf;
+    GetPrivateProfileStringW(L"autologin", L"pw_pattern", L"비밀번호:", buf, 1024, path.c_str()); g_app->autoLoginPwPattern = buf;
+    GetPrivateProfileStringW(L"autologin", L"pw", L"", buf, 1024, path.c_str()); g_app->autoLoginPw = buf;
+    GetPrivateProfileStringW(L"autologin", L"success1", L"", buf, 1024, path.c_str()); g_app->autoLoginSuccessPattern1 = buf;
+    GetPrivateProfileStringW(L"autologin", L"success2", L"", buf, 1024, path.c_str()); g_app->autoLoginSuccessPattern2 = buf;
+    GetPrivateProfileStringW(L"autologin", L"success3", L"", buf, 1024, path.c_str()); g_app->autoLoginSuccessPattern3 = buf;
+    GetPrivateProfileStringW(L"autologin", L"fail1", L"", buf, 1024, path.c_str()); g_app->autoLoginFailPattern1 = buf;
+    GetPrivateProfileStringW(L"autologin", L"fail2", L"", buf, 1024, path.c_str()); g_app->autoLoginFailPattern2 = buf;
+    GetPrivateProfileStringW(L"autologin", L"fail3", L"", buf, 1024, path.c_str()); g_app->autoLoginFailPattern3 = buf;
 
-    GetPrivateProfileStringW(L"autologin", L"id_pattern", L"아이디:", buf, 256, path.c_str());
-    g_app->autoLoginIdPattern = buf;
-
-    GetPrivateProfileStringW(L"autologin", L"id", L"", buf, 256, path.c_str());
-    g_app->autoLoginId = buf;
-
-    GetPrivateProfileStringW(L"autologin", L"pw_pattern", L"비밀번호:", buf, 256, path.c_str());
-    g_app->autoLoginPwPattern = buf;
-
-    GetPrivateProfileStringW(L"autologin", L"pw", L"", buf, 256, path.c_str());
-    g_app->autoLoginPw = buf;
+    g_app->activeAutoLoginEnabled = false;
+    g_app->autoLoginWindowActive = false;
+    g_app->keepAliveBlockedUntilTick = 0;
 }
 
+static bool ModifyMenuTextRecursive(HMENU hMenu, UINT id, const wchar_t* text)
+{
+    if (!hMenu)
+        return false;
+
+    int count = GetMenuItemCount(hMenu);
+    for (int i = 0; i < count; ++i)
+    {
+        MENUITEMINFOW mi{};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_SUBMENU;
+        if (!GetMenuItemInfoW(hMenu, i, TRUE, &mi))
+            continue;
+
+        if (!mi.hSubMenu && mi.wID == id)
+        {
+            ModifyMenuW(hMenu, id, MF_BYCOMMAND | MF_STRING, id, text);
+            return true;
+        }
+
+        if (mi.hSubMenu && ModifyMenuTextRecursive(mi.hSubMenu, id, text))
+            return true;
+    }
+    return false;
+}
 
 void UpdateMenuToggleStates()
 {
     if (!g_app || !g_app->hMainMenu) return;
 
-    // 보기(V) 하위 메뉴 업데이트 (2번째 인덱스)
-    HMENU hView = GetSubMenu(g_app->hMainMenu, 2);
-    if (hView) {
-        ModifyMenuW(hView, ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE, MF_BYCOMMAND | MF_OWNERDRAW,
-            ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE,
-            (LPCTSTR)(g_app->chatVisible ? L"채팅 캡쳐창 숨기기(&H)" : L"채팅 캡쳐창 보이기(&H)"));
-
-        ModifyMenuW(hView, ID_MENU_OPTIONS_CHAT_DOCK, MF_BYCOMMAND | MF_OWNERDRAW,
-            ID_MENU_OPTIONS_CHAT_DOCK,
-            (LPCTSTR)(g_app->chatDocked ? L"채팅 캡쳐창 분리(&D)" : L"채팅 캡쳐창 도킹(&D)"));
-    }
+    ModifyMenuTextRecursive(g_app->hMainMenu,
+        ID_MENU_CAPTURE_TOGGLE,
+        g_app->captureLogEnabled ? L"갈무리 켜짐" : L"갈무리 꺼짐");
 
     // 옵션(O) 하위 메뉴 업데이트 (3번째 인덱스)
     HMENU hOptions = GetSubMenu(g_app->hMainMenu, 3);
     if (hOptions) {
-        ModifyMenuW(hOptions, ID_MENU_OPTIONS_SHORTCUTBAR, MF_BYCOMMAND | MF_OWNERDRAW,
+        ModifyMenuW(hOptions, ID_MENU_OPTIONS_SHORTCUTBAR, MF_BYCOMMAND | MF_STRING,
             ID_MENU_OPTIONS_SHORTCUTBAR,
             (LPCTSTR)(g_app->shortcutBarVisible ? L"단축버튼 숨기기(&H)" : L"단축버튼 표시(&H)"));
 
         // 접속 유지 켜기/끄기
-        ModifyMenuW(hOptions, ID_MENU_OPTIONS_KEEPALIVE_TOGGLE, MF_BYCOMMAND | MF_OWNERDRAW,
+        ModifyMenuW(hOptions, ID_MENU_OPTIONS_KEEPALIVE_TOGGLE, MF_BYCOMMAND | MF_STRING,
             ID_MENU_OPTIONS_KEEPALIVE_TOGGLE,
             (LPCTSTR)(g_app->keepAliveEnabled ? L"접속 유지 끄기(&K)" : L"접속 유지 켜기(&K)"));
 
-        // 채팅 캡처 시간 보기/끄기
-        ModifyMenuW(hOptions, ID_MENU_OPTIONS_CHAT_TIME_TOGGLE, MF_BYCOMMAND | MF_OWNERDRAW,
-            ID_MENU_OPTIONS_CHAT_TIME_TOGGLE,
-            (LPCTSTR)(g_app->chatTimestampEnabled ? L"채팅 캡처에 시간 끄기(&T)" : L"채팅 캡처에 시간 보기(&T)"));
-
-
-        ModifyMenuW(hOptions, ID_MENU_OPTIONS_CAPTURE_LOG, MF_BYCOMMAND | MF_OWNERDRAW,
-            ID_MENU_OPTIONS_CAPTURE_LOG,
-            (LPCTSTR)(g_app->captureLogEnabled ? L"갈무리 끄기(&L)" : L"갈무리 켜기(&L)"));
     }
 
     if (g_app->hwndMain) {
@@ -1237,7 +1268,21 @@ void LoadGeneralSettings()
     std::wstring path = GetSettingsPath();
     // 기본값은 1(소리 켬)로 설정
     g_app->soundEnabled = GetPrivateProfileIntW(L"Options", L"sound_enabled", 0, path.c_str()) != 0;
-    g_app->ambiguousEastAsianWide = GetPrivateProfileIntW(L"Options", L"AmbiguousEastAsianWide", 0, path.c_str()) != 0;
+
+    // buildfix5부터는 한국어 MUD 박스/도형/화살표가 깨지지 않도록
+    // 기존 설정 파일에 0이 남아 있어도 최초 1회는 넓게 처리로 보정합니다.
+    if (GetPrivateProfileIntW(L"Options", L"AmbiguousSafeDefaultApplied", 0, path.c_str()) == 0)
+    {
+        g_app->ambiguousEastAsianWide = true;
+        WritePrivateProfileStringW(L"Options", L"AmbiguousEastAsianWide", L"1", path.c_str());
+        WritePrivateProfileStringW(L"Options", L"AmbiguousSafeDefaultApplied", L"1", path.c_str());
+    }
+    else
+    {
+        g_app->ambiguousEastAsianWide = GetPrivateProfileIntW(L"Options", L"AmbiguousEastAsianWide", 1, path.c_str()) != 0;
+    }
+    g_app->mainAlwaysOnTop = GetPrivateProfileIntW(L"Options", L"MainAlwaysOnTop", 0, path.c_str()) != 0;
+    g_app->tailSnapEnabled = GetPrivateProfileIntW(L"Options", L"TailSnapEnabled", 1, path.c_str()) != 0;
 }
 
 void SaveGeneralSettings()

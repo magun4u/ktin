@@ -1,4 +1,4 @@
-#include "constants.h"
+﻿#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -6,7 +6,55 @@
 #include "address_book.h"
 #include "resource.h"
 #include "settings.h"
+#include "auto_login.h"
 #include <commctrl.h>
+
+
+static int HexVal(wchar_t ch)
+{
+    if (ch >= L'0' && ch <= L'9') return ch - L'0';
+    if (ch >= L'a' && ch <= L'f') return ch - L'a' + 10;
+    if (ch >= L'A' && ch <= L'F') return ch - L'A' + 10;
+    return -1;
+}
+
+static std::wstring EncodePasswordForIni(const std::wstring& plain)
+{
+    if (plain.empty()) return L"";
+    static const wchar_t* hex = L"0123456789ABCDEF";
+    const wchar_t key = 0x5A;
+    std::wstring out = L"HEX:";
+    for (wchar_t ch : plain)
+    {
+        unsigned int v = ((unsigned int)ch) ^ key;
+        out.push_back(hex[(v >> 12) & 0xF]);
+        out.push_back(hex[(v >> 8) & 0xF]);
+        out.push_back(hex[(v >> 4) & 0xF]);
+        out.push_back(hex[v & 0xF]);
+    }
+    return out;
+}
+
+static std::wstring DecodePasswordFromIni(const std::wstring& stored)
+{
+    if (stored.rfind(L"HEX:", 0) != 0)
+        return stored; // 이전 빌드에서 평문으로 저장된 값 보존
+
+    std::wstring out;
+    const wchar_t key = 0x5A;
+    for (size_t i = 4; i + 3 < stored.size(); i += 4)
+    {
+        int a = HexVal(stored[i]);
+        int b = HexVal(stored[i + 1]);
+        int c = HexVal(stored[i + 2]);
+        int d = HexVal(stored[i + 3]);
+        if (a < 0 || b < 0 || c < 0 || d < 0)
+            return L"";
+        wchar_t ch = (wchar_t)((((a << 12) | (b << 8) | (c << 4) | d) ^ key) & 0xFFFF);
+        out.push_back(ch);
+    }
+    return out;
+}
 
 // 내부 전방 선언
 LRESULT CALLBACK AddressBookEntryEditorProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -17,7 +65,7 @@ void SortAddressBook() {
     std::stable_sort(g_app->addressBook.begin(), g_app->addressBook.end(), [](const AddressBookEntry& a, const AddressBookEntry& b) {
         if (g_app->addressBookSortMode == 1) return a.name < b.name;     // 이름순
         if (g_app->addressBookSortMode == 2) return a.host < b.host;     // 서버주소순
-        if (g_app->addressBookSortMode == 3) return a.alId < b.alId;     // 아이디순
+        if (g_app->addressBookSortMode > 2) g_app->addressBookSortMode = 0;
         return a.lastConnected > b.lastConnected; // 기본(0): 최근 접속순 (내림차순)
         });
 }
@@ -93,7 +141,7 @@ void LoadAddressBook()
         entry.alPwPattern = buf;
 
         GetPrivateProfileStringW(L"sessions", keyPw, L"", buf, 1024, path.c_str());
-        entry.alPw = SimpleDecrypt(buf);
+        entry.alPw = DecodePasswordFromIni(buf);
 
         GetPrivateProfileStringW(L"sessions", keyLS1, L"", buf, 1024, path.c_str());
         entry.loginSuccessPattern1 = buf;
@@ -119,7 +167,9 @@ void LoadAddressBook()
         entry.autoReconnect = GetPrivateProfileIntW(L"sessions", keyAR, 0, path.c_str()) != 0;
 
         if (!entry.name.empty() && !entry.host.empty())
+        {
             g_app->addressBook.push_back(entry);
+        }
     }
 
     SortAddressBook();
@@ -179,13 +229,12 @@ void SaveAddressBook()
         wsprintfW(buf, L"%d", g_app->addressBook[i].charset);
         WritePrivateProfileStringW(L"sessions", keyC, buf, path.c_str());
 
-        WritePrivateProfileStringW(L"sessions", keyAL,
-            g_app->addressBook[i].autoLoginEnabled ? L"1" : L"0", path.c_str());
+        WritePrivateProfileStringW(L"sessions", keyAL, g_app->addressBook[i].autoLoginEnabled ? L"1" : L"0", path.c_str());
 
         WritePrivateProfileStringW(L"sessions", keyIdP, g_app->addressBook[i].alIdPattern.c_str(), path.c_str());
         WritePrivateProfileStringW(L"sessions", keyId, g_app->addressBook[i].alId.c_str(), path.c_str());
         WritePrivateProfileStringW(L"sessions", keyPwP, g_app->addressBook[i].alPwPattern.c_str(), path.c_str());
-        WritePrivateProfileStringW(L"sessions", keyPw, SimpleEncrypt(g_app->addressBook[i].alPw).c_str(), path.c_str());
+        WritePrivateProfileStringW(L"sessions", keyPw, EncodePasswordForIni(g_app->addressBook[i].alPw).c_str(), path.c_str());
 
         WritePrivateProfileStringW(L"sessions", keyLS1, g_app->addressBook[i].loginSuccessPattern1.c_str(), path.c_str());
         WritePrivateProfileStringW(L"sessions", keyLS2, g_app->addressBook[i].loginSuccessPattern2.c_str(), path.c_str());
@@ -198,8 +247,7 @@ void SaveAddressBook()
         wsprintfW(buf, L"%I64u", g_app->addressBook[i].lastConnected);
         WritePrivateProfileStringW(L"sessions", keyLC, buf, path.c_str());
 
-        WritePrivateProfileStringW(L"sessions", keyAR,
-            g_app->addressBook[i].autoReconnect ? L"1" : L"0", path.c_str());
+        WritePrivateProfileStringW(L"sessions", keyAR, g_app->addressBook[i].autoReconnect ? L"1" : L"0", path.c_str());
     }
 
     // 남은 빈칸 청소
@@ -282,8 +330,6 @@ void RefreshAddressBookList(HWND hList)
         wsprintfW(hostPort, L"%s:%d", e.host.c_str(), e.port);
         ListView_SetItemText(hList, i, 1, hostPort);
 
-        // 아이디 표시 (개별 자동로그인이 켜져있을 때만 아이디 표시)
-        ListView_SetItemText(hList, i, 2, (LPWSTR)e.alId.c_str());
     }
 }
 
@@ -347,25 +393,8 @@ void ConnectAddressBookEntry(const AddressBookEntry& entry)
 
     KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
 
-    // 자동 로그인 설정 (기존 그대로)
-    if (entry.autoLoginEnabled) {
-        g_app->activeAutoLoginEnabled = true;
-        g_app->activeAutoLoginIdPattern = entry.alIdPattern;
-        g_app->activeAutoLoginId = entry.alId;
-        g_app->activeAutoLoginPwPattern = entry.alPwPattern;
-        g_app->activeAutoLoginPw = entry.alPw;
-    }
-    else {
-        g_app->activeAutoLoginEnabled = g_app->autoLoginEnabled;
-        g_app->activeAutoLoginIdPattern = g_app->autoLoginIdPattern;
-        g_app->activeAutoLoginId = g_app->autoLoginId;
-        g_app->activeAutoLoginPwPattern = g_app->autoLoginPwPattern;
-        g_app->activeAutoLoginPw = g_app->autoLoginPw;
-    }
-    if (!g_app->activeAutoLoginEnabled)
-        g_app->autoLoginWindowActive = false;
-
-    g_app->autoLoginState = 0;
+    // 접속 직후 60초 동안만 로그인 패턴을 검사합니다.
+    StartAutoLoginWindowForAddressEntry(entry);
 
     // ★★★ 강제 charset 재설정 (전환 시에도 안전장치) ★★★
     if (entry.charset == 0) {
@@ -379,19 +408,7 @@ void ConnectAddressBookEntry(const AddressBookEntry& entry)
     std::wstring cmd = L"#session {" + sessionName + L"} {" + host + L"} {" + portBuf + L"}";
     SendRawCommandToMud(cmd);
 
-    if (g_app->activeAutoLoginEnabled)
-    {
-        g_app->autoLoginStartTick = GetTickCount();
-        g_app->autoLoginWindowActive = true;
-        g_app->autoLoginState = 0;
-        g_app->autoLoginTriggered = false;
-    }
-    else
-    {
-        g_app->autoLoginWindowActive = false;
-        g_app->autoLoginState = 0;
-        g_app->autoLoginTriggered = false;
-    }
+    // StartAutoLoginWindowForAddressEntry()에서 이미 초기화했습니다.
 
     if (!Trim(entry.scriptPath).empty()) {
         SendRawCommandToMud(L"#read {" + Trim(entry.scriptPath) + L"}");
@@ -430,7 +447,7 @@ bool PromptAddressBookEntryEditor(HWND hwnd, AddressBookEntry& entry, bool isEdi
         isEdit ? L"주소 수정" : L"새 주소 추가",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        470, 620,
+        500, 475,
         hwnd,
         nullptr,
         GetModuleHandleW(nullptr),
@@ -477,85 +494,40 @@ bool PromptAddressBookEntryEditor(HWND hwnd, AddressBookEntry& entry, bool isEdi
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         350, 164, 80, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_BROWSE, nullptr, nullptr);
 
-    HWND hChkAL = CreateWindowExW(0, L"BUTTON", L"주소록 개별 자동 로그인 사용",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-        20, 204, 250, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_CHK_AL, nullptr, nullptr);
+    int alY = 205;
+    HWND hChkAL = CreateWindowExW(0, L"BUTTON", L"이 주소에 개별 자동 로그인 사용", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        20, alY, 250, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_CHK_AL, nullptr, nullptr);
     SendMessageW(hChkAL, BM_SETCHECK, entry.autoLoginEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    HWND hChkReconn = CreateWindowExW(0, L"BUTTON", L"연결 끊김 시 자동 재접속",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-        270, 204, 180, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_CHK_AUTORECONN, nullptr, nullptr);
-    SendMessageW(hChkReconn, BM_SETCHECK, entry.autoReconnect ? BST_CHECKED : BST_UNCHECKED, 0);
+    CreateWindowExW(0, L"STATIC", L"아이디 패턴:", WS_CHILD | WS_VISIBLE, 20, alY + 36, 85, 20, hDlg, nullptr, nullptr, nullptr);
+    HWND hEditIdPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alIdPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        110, alY + 32, 155, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID_PAT, nullptr, nullptr);
+    CreateWindowExW(0, L"STATIC", L"아이디:", WS_CHILD | WS_VISIBLE, 275, alY + 36, 55, 20, hDlg, nullptr, nullptr, nullptr);
+    HWND hEditId = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alId.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        330, alY + 32, 120, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID, nullptr, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"　아이디 패턴:", WS_CHILD | WS_VISIBLE,
-        20, 240, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditAlIdPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alIdPattern.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 236, 160, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID_PAT, nullptr, nullptr);
+    CreateWindowExW(0, L"STATIC", L"비번 패턴:", WS_CHILD | WS_VISIBLE, 20, alY + 70, 85, 20, hDlg, nullptr, nullptr, nullptr);
+    HWND hEditPwPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPwPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        110, alY + 66, 155, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW_PAT, nullptr, nullptr);
+    CreateWindowExW(0, L"STATIC", L"비번:", WS_CHILD | WS_VISIBLE, 275, alY + 70, 55, 20, hDlg, nullptr, nullptr, nullptr);
+    HWND hEditPw = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPw.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
+        330, alY + 66, 120, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW, nullptr, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"　아이디:", WS_CHILD | WS_VISIBLE,
-        275, 240, 60, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditAlId = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alId.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        335, 236, 95, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID, nullptr, nullptr);
+    HWND hChkReconnect = CreateWindowExW(0, L"BUTTON", L"연결 실패/끊김 시 자동 재연결",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        20, alY + 108, 260, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_CHK_AUTORECONN, nullptr, nullptr);
+    SendMessageW(hChkReconnect, BM_SETCHECK, entry.autoReconnect ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    CreateWindowExW(0, L"STATIC", L"비밀번호 패턴:", WS_CHILD | WS_VISIBLE,
-        20, 276, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditAlPwPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPwPattern.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 272, 160, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW_PAT, nullptr, nullptr);
-
-    CreateWindowExW(0, L"STATIC", L"비밀번호:", WS_CHILD | WS_VISIBLE,
-        275, 276, 60, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditAlPw = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPw.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
-        335, 272, 95, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW, nullptr, nullptr);
-
-    // 로그인 성공 패턴
-    CreateWindowExW(0, L"STATIC", L"성공패턴1:", WS_CHILD | WS_VISIBLE,
-        20, 320, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditSuccess1 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginSuccessPattern1.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 316, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_SUCCESS1, nullptr, nullptr);
-
-    CreateWindowExW(0, L"STATIC", L"성공패턴2:", WS_CHILD | WS_VISIBLE,
-        20, 352, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditSuccess2 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginSuccessPattern2.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 348, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_SUCCESS2, nullptr, nullptr);
-
-    CreateWindowExW(0, L"STATIC", L"성공패턴3:", WS_CHILD | WS_VISIBLE,
-        20, 384, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditSuccess3 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginSuccessPattern3.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 380, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_SUCCESS3, nullptr, nullptr);
-
-    // 로그인 실패 패턴
-    CreateWindowExW(0, L"STATIC", L"실패패턴1:", WS_CHILD | WS_VISIBLE,
-        20, 420, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditFail1 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginFailPattern1.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 416, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_FAIL1, nullptr, nullptr);
-
-    CreateWindowExW(0, L"STATIC", L"실패패턴2:", WS_CHILD | WS_VISIBLE,
-        20, 452, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditFail2 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginFailPattern2.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 448, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_FAIL2, nullptr, nullptr);
-
-    CreateWindowExW(0, L"STATIC", L"실패패턴3:", WS_CHILD | WS_VISIBLE,
-        20, 484, 80, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditFail3 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.loginFailPattern3.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        105, 480, 325, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_LOGIN_FAIL3, nullptr, nullptr);
+    CreateWindowExW(0, L"STATIC", L"※ 접속 후 60초만 검사하고 아이디/비번 전송 후 즉시 OFF", WS_CHILD | WS_VISIBLE,
+        20, alY + 138, 430, 20, hDlg, nullptr, nullptr, nullptr);
 
     CreateWindowExW(0, L"BUTTON", L"확인(&O)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-        260, 540, 80, 30, hDlg, (HMENU)(UINT_PTR)IDOK, nullptr, nullptr);
+        290, 390, 80, 30, hDlg, (HMENU)(UINT_PTR)IDOK, nullptr, nullptr);
 
     CreateWindowExW(0, L"BUTTON", L"취소(&C)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        350, 540, 80, 30, hDlg, (HMENU)(UINT_PTR)IDCANCEL, nullptr, nullptr);
+        380, 390, 80, 30, hDlg, (HMENU)(UINT_PTR)IDCANCEL, nullptr, nullptr);
 
     SetWindowTextW(hEditName, entry.name.c_str());
     SetWindowTextW(hEditHost, entry.host.c_str());
@@ -626,14 +598,13 @@ bool PromptAddressBook(HWND hwnd)
         16, 44, 380, 250, hDlg, (HMENU)(INT_PTR)ID_ADDRESSBOOK_LIST, 0, nullptr);
 
     // 격자선(그리드)과 전체 행 선택 효과를 추가합니다.
-    ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
     // 헤더(칼럼) 만들기
     LVCOLUMNW lvc = {};
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    lvc.pszText = (LPWSTR)L"이름"; lvc.cx = 120; ListView_InsertColumn(hList, 0, &lvc);
-    lvc.pszText = (LPWSTR)L"서버주소:포트"; lvc.cx = 170; ListView_InsertColumn(hList, 1, &lvc);
-    lvc.pszText = (LPWSTR)L"아이디"; lvc.cx = 86; ListView_InsertColumn(hList, 2, &lvc);
+    lvc.pszText = (LPWSTR)L"이름"; lvc.cx = 140; ListView_InsertColumn(hList, 0, &lvc);
+    lvc.pszText = (LPWSTR)L"서버주소:포트"; lvc.cx = 220; ListView_InsertColumn(hList, 1, &lvc);
 
     RefreshAddressBookList(hList);
 
@@ -643,7 +614,7 @@ bool PromptAddressBook(HWND hwnd)
     SendMessageW(hComboSort, CB_ADDSTRING, 0, (LPARAM)L"최근 접속순");
     SendMessageW(hComboSort, CB_ADDSTRING, 0, (LPARAM)L"이름순");
     SendMessageW(hComboSort, CB_ADDSTRING, 0, (LPARAM)L"서버주소순");
-    SendMessageW(hComboSort, CB_ADDSTRING, 0, (LPARAM)L"아이디순");
+    if (g_app->addressBookSortMode > 2) g_app->addressBookSortMode = 0;
     SendMessageW(hComboSort, CB_SETCURSEL, g_app->addressBookSortMode, 0);
 
     int btnX = 410; // 버튼 X좌표 뒤로 밀기
@@ -660,22 +631,10 @@ bool PromptAddressBook(HWND hwnd)
     HWND hHeader = ListView_GetHeader(hList);
     if (hHeader) SendMessageW(hHeader, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-    // 리스트 행 높이 조정
-    HIMAGELIST hRowHeight = ImageList_Create(1, 20, ILC_COLOR32, 1, 1);
-    if (hRowHeight)
-    {
-        // 안정적인 더미 아이콘 사용
-        HICON hDummyIcon = LoadIcon(nullptr, IDI_APPLICATION);
-        if (hDummyIcon)
-        {
-            ImageList_AddIcon(hRowHeight, hDummyIcon);
-        }
-
-        ListView_SetImageList(hList, hRowHeight, LVSIL_SMALL);
-
-        // ★ 중요: 핸들 저장 (나중에 해제용)
-        SetPropW(hDlg, L"AddressBookRowImageList", (HANDLE)hRowHeight);
-    }
+    // 행 높이를 억지로 맞추기 위해 small image list를 붙이면
+    // 보고서(ListView Report) 모드에서 첫 칼럼 왼쪽에 아이콘 여백이 생겨
+    // 검은 세로선/찌꺼기처럼 보일 수 있습니다. 주소록은 아이콘을 쓰지 않으므로
+    // 이미지 리스트를 붙이지 않습니다.
 
     RECT rcOwner{}, rcDlg{}; GetWindowRect(hwnd, &rcOwner); GetWindowRect(hDlg, &rcDlg);
     int dlgW = rcDlg.right - rcDlg.left; int dlgH = rcDlg.bottom - rcDlg.top;
@@ -732,46 +691,22 @@ LRESULT CALLBACK AddressBookEntryEditorProc(HWND hwnd, UINT msg, WPARAM wParam, 
                 state->entry->scriptPath = script;
                 state->entry->charset = (int)SendMessageW(GetDlgItem(hwnd, ID_ADDRESSBOOK_CHARSET), CB_GETCURSEL, 0, 0);
 
-                // 자동 로그인 정보 저장
-                state->entry->autoLoginEnabled =
-                    (SendMessageW(GetDlgItem(hwnd, ID_ADDRESSBOOK_CHK_AL), BM_GETCHECK, 0, 0) == BST_CHECKED);
-
-                wchar_t buf[1024] = {};
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_ID_PAT), buf, 1024);
-                state->entry->alIdPattern = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_ID), buf, 1024);
-                state->entry->alId = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_PW_PAT), buf, 1024);
-                state->entry->alPwPattern = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_PW), buf, 1024);
-                state->entry->alPw = Trim(buf);
-
-                // 로그인 성공 패턴 저장
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_SUCCESS1), buf, 1024);
-                state->entry->loginSuccessPattern1 = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_SUCCESS2), buf, 1024);
-                state->entry->loginSuccessPattern2 = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_SUCCESS3), buf, 1024);
-                state->entry->loginSuccessPattern3 = Trim(buf);
-
-                // 로그인 실패 패턴 저장
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_FAIL1), buf, 1024);
-                state->entry->loginFailPattern1 = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_FAIL2), buf, 1024);
-                state->entry->loginFailPattern2 = Trim(buf);
-
-                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_LOGIN_FAIL3), buf, 1024);
-                state->entry->loginFailPattern3 = Trim(buf);
-
-                state->entry->autoReconnect =
-                    (SendMessageW(GetDlgItem(hwnd, ID_ADDRESSBOOK_CHK_AUTORECONN), BM_GETCHECK, 0, 0) == BST_CHECKED);
+                state->entry->autoLoginEnabled = (SendMessageW(GetDlgItem(hwnd, ID_ADDRESSBOOK_CHK_AL), BM_GETCHECK, 0, 0) == BST_CHECKED);
+                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_ID_PAT), nameBuf, 256);
+                state->entry->alIdPattern = Trim(nameBuf);
+                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_ID), nameBuf, 256);
+                state->entry->alId = Trim(nameBuf);
+                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_PW_PAT), nameBuf, 256);
+                state->entry->alPwPattern = Trim(nameBuf);
+                GetWindowTextW(GetDlgItem(hwnd, ID_ADDRESSBOOK_AL_PW), nameBuf, 256);
+                state->entry->alPw = Trim(nameBuf);
+                state->entry->loginSuccessPattern1.clear();
+                state->entry->loginSuccessPattern2.clear();
+                state->entry->loginSuccessPattern3.clear();
+                state->entry->loginFailPattern1.clear();
+                state->entry->loginFailPattern2.clear();
+                state->entry->loginFailPattern3.clear();
+                state->entry->autoReconnect = (SendMessageW(GetDlgItem(hwnd, ID_ADDRESSBOOK_CHK_AUTORECONN), BM_GETCHECK, 0, 0) == BST_CHECKED);
 
                 state->accepted = true;
             }
@@ -947,14 +882,7 @@ LRESULT CALLBACK AddressBookPopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return (INT_PTR)GetSysColorBrush(COLOR_BTNFACE);
     }
     case WM_DESTROY:
-    {
-        HIMAGELIST hImg = (HIMAGELIST)GetPropW(hwnd, L"AddressBookRowImageList");
-        if (hImg) {
-            RemovePropW(hwnd, L"AddressBookRowImageList");
-            ImageList_Destroy(hImg);
-        }
         return 0;
-    }
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);

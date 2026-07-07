@@ -1,4 +1,4 @@
-// utils.cpp
+﻿// utils.cpp
 #include "constants.h"
 #include "types.h"
 #include "main.h"
@@ -10,6 +10,7 @@
 #include "abbreviation.h"
 #include "timer.h"
 #include "memo.h"
+#include "auto_login.h"
 #include <commdlg.h>
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -523,20 +524,48 @@ static bool FindOwnerDrawMenuMeta(HMENU hMenu, ULONG_PTR itemData, bool* hasSubm
 
 void GetTerminalOffset(HWND hwnd, int& offsetX, int& offsetY)
 {
-    offsetX = 0; offsetY = 0;
+    offsetX = 0;
+    offsetY = 0;
     if (!g_app || !g_app->termBuffer) return;
-    SIZE cell = GetLogCellPixelSize(hwnd);
-    RECT rc; GetClientRect(hwnd, &rc);
-    int gridW = g_app->termBuffer->width * cell.cx;
-    int gridH = g_app->termBuffer->height * cell.cy;
-    if (g_app->termAlign == 0) offsetX = 4;
-    else if (g_app->termAlign == 2) offsetX = max(0, (rc.right - rc.left) - gridW - 4);
-    else offsetX = max(0, ((rc.right - rc.left) - gridW) / 2);
 
-    if (gridH > (rc.bottom - rc.top)) {
-        offsetY = (rc.bottom - rc.top) - gridH;
-    } else {
-        offsetY = max(0, ((rc.bottom - rc.top) - gridH) / 2);
+    SIZE cell = GetLogCellPixelSize(hwnd);
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+
+    const int clientW = (int)(rc.right - rc.left);
+    const int clientH = (int)(rc.bottom - rc.top);
+    const int gridW = g_app->termBuffer->width * cell.cx;
+    const int gridH = g_app->termBuffer->height * cell.cy;
+
+    int ml = max(0, g_app->termMarginLeft);
+    int mr = max(0, g_app->termMarginRight);
+    int mt = max(0, g_app->termMarginTop);
+    int mb = max(0, g_app->termMarginBottom);
+
+    // 여백이 창보다 커서 계산이 뒤집히지 않도록 방어합니다.
+    if (ml + mr > clientW) { ml = 0; mr = 0; }
+    if (mt + mb > clientH) { mt = 0; mb = 0; }
+
+    const int areaW = max(0, clientW - ml - mr);
+    const int areaH = max(0, clientH - mt - mb);
+
+    if (g_app->termAlign == 0) {
+        offsetX = ml;
+    }
+    else if (g_app->termAlign == 2) {
+        offsetX = max(ml, clientW - mr - gridW);
+    }
+    else {
+        offsetX = ml + max(0, (areaW - gridW) / 2);
+    }
+
+    // 출력 높이가 남으면 설정된 영역 안에서 세로 중앙 정렬합니다.
+    // 출력 높이가 더 크면 아래쪽 프롬프트가 보이도록 아래 여백을 보존하며 붙입니다.
+    if (gridH > areaH) {
+        offsetY = clientH - mb - gridH;
+    }
+    else {
+        offsetY = mt + max(0, (areaH - gridH) / 2);
     }
 }
 
@@ -608,8 +637,8 @@ bool FitWindowToScreenGrid(HWND hwnd, int cols, int rows, bool onlyIfTooSmall)
     if (cols < 20) cols = 20;
     if (rows < 5) rows = 5;
     SIZE cell = GetLogCellPixelSize(hwnd);
-    int logClientW = cell.cx * cols;
-    int logClientH = cell.cy * rows;
+    int logClientW = cell.cx * cols + max(0, g_app->termMarginLeft) + max(0, g_app->termMarginRight);
+    int logClientH = cell.cy * rows + max(0, g_app->termMarginTop) + max(0, g_app->termMarginBottom);
     int inputHeight = GetInputAreaHeight();
     int shortcutHeight = GetShortcutBarHeight();
     int statusHeight = GetStatusBarHeight();
@@ -663,34 +692,64 @@ void JumpRichEditToBottom(HWND hwndRich)
     SendMessageW(hwndRich, EM_SCROLLCARET, 0, 0);
 }
 
+
+static void ReturnTerminalViewToLive()
+{
+    if (!g_app || !g_app->termBuffer)
+        return;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_app->termBuffer->mtx);
+        g_app->termBuffer->scrollOffset = 0;
+    }
+
+    if (g_app->hwndLog && IsWindow(g_app->hwndLog))
+        InvalidateRect(g_app->hwndLog, nullptr, FALSE);
+}
+
 void SendTextToMud(const std::wstring& text)
 {
-    if (!g_app || text.empty()) return;
+    if (!g_app) return;
+
+    // 사용자가 새 명령을 입력하면 지난 화면 보기 상태를 자동으로 해제한다.
+    // 그래야 지도처럼 여러 줄 출력되는 명령의 마지막 프롬프트까지 자동으로 따라간다.
+    ReturnTerminalViewToLive();
+
+    // 빈 엔터도 MUD에 전달되어야 한다.
+    if (text.empty()) {
+        SendCommandToProcess(L"");
+        return;
+    }
 
     // 1. 줄임말 변환 
     std::wstring finalText;
     TryExpandAbbreviation(text, finalText);
 
-    if (finalText.empty()) return;
+    if (finalText.empty()) {
+        SendCommandToProcess(L"");
+        return;
+    }
 
     // 2. 타이머 제어 명령 가로채기 (타이머도 서버 접속과 무관하게 언제든 제어되어야 하므로 위로 올림)
     if (InterceptTimerCommand(finalText)) return;
 
-    // 3. 접속 안 된 상태 방어 로직 (★ 핵심: #으로 시작하는 틴틴 명령어는 무조건 예외로 통과시킴!)
-    if (!g_app->isConnected && finalText[0] != L'#')
-    {
-        if (g_app->soundEnabled)
-            MessageBeep(MB_ICONWARNING);
-        return;
-    }
-
-    // 4. 최종 전송 (서버 명령어거나, #으로 시작하는 틴틴 명령어)
+    // 안전판 수정: isConnected 값은 TinTin++ 출력/이벤트 파싱에 의존하므로
+    // 실제로 연결되어 있어도 false로 남을 수 있습니다.
+    // 그래서 입력 명령은 막지 않고 항상 TinTin++ 프로세스로 보냅니다.
     SendCommandToProcess(finalText);
 }
 
 void SendRawCommandToMud(const std::wstring& text)
 {
-    if (!g_app || text.empty()) return;
+    if (!g_app) return;
+
+    // 주소록/빠른연결/스크립트/단축버튼 같은 내부 명령도 새 출력을 볼 때는 live 화면으로 복귀한다.
+    ReturnTerminalViewToLive();
+
+    if (text.empty()) {
+        SendCommandToProcess(L"");
+        return;
+    }
 
     // (참고: 단축버튼/트리거 등 내부 시스템에서 쏘는 명령은 줄임말을 거치지 않는 것이 정석입니다.)
 
@@ -702,8 +761,32 @@ void SendRawCommandToMud(const std::wstring& text)
 
 void SendKeepAliveNow()
 {
-    if (!g_app || !g_app->keepAliveEnabled || !g_app->isConnected) return;
-    SendCommandToProcess(g_app->keepAliveCommand);
+    if (!g_app || !g_app->keepAliveEnabled)
+        return;
+
+    // 자동 로그인/로그인 대기 시간에는 접속 유지 명령을 보내지 않습니다.
+    if (IsAutoLoginKeepAliveBlocked())
+        return;
+
+    std::wstring cmd = Trim(g_app->keepAliveCommand);
+    if (cmd.empty())
+        return;
+
+    // 접속 유지 명령은 실제 MUD 세션이 잡힌 뒤에만 보냅니다.
+    // isConnected/isSessionActive가 간혹 흔들릴 수 있으므로, TinTin++ 접속 성공/끊김
+    // 문구를 감지해 기록한 마지막 성공/끊김 tick도 함께 확인합니다.
+    bool definitelyConnected = (g_app->isConnected || g_app->isSessionActive);
+    if (g_app->lastConnectionSuccessTick != 0 &&
+        (g_app->lastConnectionDownTick == 0 ||
+         (LONG)(g_app->lastConnectionSuccessTick - g_app->lastConnectionDownTick) > 0))
+    {
+        definitelyConnected = true;
+    }
+
+    if (!definitelyConnected)
+        return;
+
+    SendCommandToProcess(cmd);
 }
 
 void SaveLastConnectCommand(const std::wstring& text)
@@ -1014,6 +1097,9 @@ void SendCommandToProcess(const std::wstring& line)
     }
 
     std::wstring sendText = line;
+
+    if (!line.empty())
+        NotifyPossibleConnectionCommand(line);
 
     if (sendText.empty())
         sendText = L"\r";

@@ -1,2 +1,0 @@
-# ktin
-TinTin ++ GUI
