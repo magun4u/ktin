@@ -264,6 +264,7 @@ void CreateMainMenu(HWND hwnd)
             AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPopup, text);
         };
 
+    AddODItem(hMenuFile, ID_MENU_FILE_NEW_WINDOW, L"새 창 띄우기");
     AddODItem(hMenuFile, ID_MENU_FILE_QUICK_CONNECT, L"빠른 연결...\tAlt+Q");
     AddODItem(hMenuFile, ID_MENU_FILE_ADDRESSBOOK, L"주소록...(&A)\tAlt+A");
     AddODItem(hMenuFile, ID_MENU_FILE_ZAP, L"연결 끊기(#ZAP)\tCtrl+F9");

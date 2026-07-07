@@ -76,11 +76,14 @@ struct TailState
     bool startedFromMiddle = false;
     std::wstring fragment;
     std::deque<std::wstring> lines;
-    int maxLines = 2000;
+    int maxLines = 2000;              // RichEdit에 유지할 표시 줄 수
+    LONGLONG totalMatchedLines = 0;   // 상태바에 표시할 누적 매칭 줄 수
+    bool reading = false;             // tail 공통 타이머 중 재진입 방지
     WNDPROC oldEditProc = nullptr;
 };
 
 static std::vector<TailState*> g_tailWindows;
+static HWND g_tailTimerOwner = nullptr;
 static LOGFONTW g_lastAppliedTailFont{};
 static bool g_haveLastAppliedTailFont = false;
 
@@ -130,7 +133,8 @@ void ApplyTailWindowFonts()
 
         if (st->hwndStatus && IsWindow(st->hwndStatus))
         {
-            SendMessageW(st->hwndStatus, WM_SETFONT, (WPARAM)g_app->hFontLog, TRUE);
+            HFONT hStatusFont = GetPopupUIFont(st->hwndStatus);
+            SendMessageW(st->hwndStatus, WM_SETFONT, (WPARAM)hStatusFont, TRUE);
             InvalidateRect(st->hwndStatus, nullptr, TRUE);
         }
 
@@ -150,22 +154,15 @@ static bool ReadTailIniBool(const wchar_t* key, bool defValue)
     return GetPrivateProfileIntW(L"tail_filters", key, defValue ? 1 : 0, GetSettingsPath().c_str()) != 0;
 }
 
-static bool TailAnsiEnabledForMode(int mode)
+static bool TailAnsiEnabledForMode(int /*mode*/)
 {
-    LoadTailFilterSettings();
-    switch (mode)
-    {
-    case 0: return g_tailFilters.ansiAll;
-    case 1: return g_tailFilters.ansiChat;
-    case 2: return g_tailFilters.ansiAuction;
-    case 3: return g_tailFilters.ansiItem;
-    case 5: return g_tailFilters.ansiTalk;
-    case 6: return g_tailFilters.ansiExp;
-    case 7: return g_tailFilters.ansiUser1;
-    case 8: return g_tailFilters.ansiUser2;
-    case 9: return g_tailFilters.ansiUser3;
-    default: return false;
-    }
+    // buildfix34:
+    // RichEdit에 ANSI 색상을 run 단위로 계속 입히는 방식은 장시간 tail 보기에서
+    // UI 스레드 정체/검은 글자/메뉴 무응답을 일으킬 수 있어 일단 비활성화합니다.
+    // 갈무리 보기창은 항상 ANSI 코드를 제거한 평문으로 표시합니다.
+    // ANSI 원문은 갈무리 로그 파일에는 그대로 저장되므로, 나중에 별도 GDI 렌더러 방식으로
+    // 다시 구현할 수 있습니다.
+    return false;
 }
 
 static void CenterPopupToOwner(HWND hwnd, HWND owner);
@@ -630,7 +627,8 @@ static void TailUpdateStatus(TailState* st)
     if (st->activeMode == 4 && !st->customPattern.empty())
         mode += L" : " + st->customPattern;
     wchar_t buf[1024];
-    wsprintfW(buf, L"%s 보기 | %d줄 | %s", mode.c_str(), (int)st->lines.size(), st->logPath.c_str());
+    _snwprintf_s(buf, 1024, _TRUNCATE, L"%s 보기 | %lld줄 | 표시 %d줄 | %s",
+        mode.c_str(), st->totalMatchedLines, (int)st->lines.size(), st->logPath.c_str());
     SetWindowTextW(st->hwndStatus, buf);
 }
 
@@ -697,6 +695,7 @@ static void TailAppendLineEx(TailState* st, const std::wstring& plainLine, const
 {
     if (!st || !st->hwndEdit || !IsWindow(st->hwndEdit))
         return;
+    st->totalMatchedLines++;
     st->lines.push_back(plainLine);
     while ((int)st->lines.size() > st->maxLines)
         st->lines.pop_front();
@@ -779,6 +778,10 @@ static void TailReadNewData(TailState* st, bool initial)
 {
     if (!st || !g_app)
         return;
+    if (st->reading)
+        return;
+    st->reading = true;
+    struct TailReadGuard { TailState* s; ~TailReadGuard(){ if (s) s->reading = false; } } guard{ st };
     FlushCaptureLogBuffer();
 
     // 갈무리 파일은 갈무리를 새로 켜거나 재접속 과정에서 바뀔 수 있습니다.
@@ -788,6 +791,10 @@ static void TailReadNewData(TailState* st, bool initial)
         st->logPath = g_app->captureLogPath;
         st->lastPos = 0;
         st->fragment.clear();
+        st->lines.clear();
+        st->totalMatchedLines = 0;
+        if (st->hwndEdit && IsWindow(st->hwndEdit))
+            SetWindowTextW(st->hwndEdit, L"");
         st->firstRead = false;
         st->startedFromMiddle = false;
     }
@@ -811,6 +818,10 @@ static void TailReadNewData(TailState* st, bool initial)
     {
         st->lastPos = 0;
         st->fragment.clear();
+        st->lines.clear();
+        st->totalMatchedLines = 0;
+        if (st->hwndEdit && IsWindow(st->hwndEdit))
+            SetWindowTextW(st->hwndEdit, L"");
         st->firstRead = false;
         st->startedFromMiddle = false;
     }
@@ -837,6 +848,7 @@ static void TailReloadActiveMode(TailState* st)
     if (st->hwndEdit && IsWindow(st->hwndEdit))
         SetWindowTextW(st->hwndEdit, L"");
     st->lines.clear();
+    st->totalMatchedLines = 0;
     st->lastPos = 0;
     st->firstRead = true;
     st->startedFromMiddle = false;
@@ -1563,7 +1575,7 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             g_lastAppliedTailFont = g_app->logStyle.font;
             g_haveLastAppliedTailFont = true;
             TailSetCharFormat(st->hwndEdit, g_app->logStyle.textColor, RGB(0, 0, 0), false);
-            SendMessageW(st->hwndStatus, WM_SETFONT, (WPARAM)font, TRUE);
+            SendMessageW(st->hwndStatus, WM_SETFONT, (WPARAM)GetPopupUIFont(st->hwndStatus), TRUE);
             SendMessageW(st->hwndTab, WM_SETFONT, (WPARAM)font, TRUE);
         }
         SetPropW(st->hwndEdit, L"TailState", st);
@@ -1571,7 +1583,11 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         TailRebuildTabs(st);
         TailLayout(st);
         TailReloadActiveMode(st);
-        SetTimer(hwnd, ID_TIMER_TAIL_REFRESH, 1000, nullptr);
+        if (!g_tailTimerOwner || !IsWindow(g_tailTimerOwner))
+        {
+            g_tailTimerOwner = hwnd;
+            SetTimer(hwnd, ID_TIMER_TAIL_REFRESH, 1000, nullptr);
+        }
         return 0;
     }
     case WM_SIZE:
@@ -1583,7 +1599,11 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_TIMER:
         if (wParam == ID_TIMER_TAIL_REFRESH)
         {
-            TailReadNewData(st, false);
+            // buildfix34: 모든 갈무리 보기창이 각자 타이머를 돌리지 않고,
+            // 대표 창 하나의 공통 tail 타이머가 열린 갈무리창을 순서대로 갱신합니다.
+            std::vector<TailState*> snapshot = g_tailWindows;
+            for (auto* tw : snapshot)
+                TailReadNewData(tw, false);
             return 0;
         }
         break;
@@ -1627,7 +1647,25 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 RemovePropW(st->hwndEdit, L"TailState");
                 if (st->oldEditProc) SetWindowLongPtrW(st->hwndEdit, GWLP_WNDPROC, (LONG_PTR)st->oldEditProc);
             }
+            bool wasTimerOwner = (hwnd == g_tailTimerOwner);
+            if (wasTimerOwner)
+            {
+                KillTimer(hwnd, ID_TIMER_TAIL_REFRESH);
+                g_tailTimerOwner = nullptr;
+            }
             g_tailWindows.erase(std::remove(g_tailWindows.begin(), g_tailWindows.end(), st), g_tailWindows.end());
+            if (wasTimerOwner && !g_tailWindows.empty())
+            {
+                for (auto* next : g_tailWindows)
+                {
+                    if (next && next->hwnd && IsWindow(next->hwnd))
+                    {
+                        g_tailTimerOwner = next->hwnd;
+                        SetTimer(next->hwnd, ID_TIMER_TAIL_REFRESH, 1000, nullptr);
+                        break;
+                    }
+                }
+            }
             delete st;
             if (g_app && g_app->hwndMain)
             {
@@ -1674,11 +1712,13 @@ static HWND CreateFilterEdit(HWND hwnd, int id, const std::wstring& text, int x,
         x, y, w, h, hwnd, (HMENU)(UINT_PTR)id, GetModuleHandleW(nullptr), nullptr);
 }
 
-static HWND CreateAnsiCheck(HWND hwnd, int id, bool checked, int x, int y)
+static HWND CreateAnsiCheck(HWND hwnd, int id, bool /*checked*/, int x, int y)
 {
-    HWND chk = CreateWindowExW(0, L"BUTTON", L"ANSI 보기", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-        x, y, 100, 22, hwnd, (HMENU)(UINT_PTR)id, GetModuleHandleW(nullptr), nullptr);
-    SendMessageW(chk, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    // buildfix34: 기존 ANSI RichEdit 색상 출력은 안정성 문제로 잠시 비활성화합니다.
+    // 체크박스는 위치/설정 호환을 위해 남기되, 사용자가 켤 수 없도록 회색 처리합니다.
+    HWND chk = CreateWindowExW(0, L"BUTTON", L"ANSI 보기(보류)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_DISABLED,
+        x, y, 125, 22, hwnd, (HMENU)(UINT_PTR)id, GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(chk, BM_SETCHECK, BST_UNCHECKED, 0);
     return chk;
 }
 
@@ -1711,7 +1751,7 @@ static LRESULT CALLBACK TailFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         CreateLabel(hwnd, L"사용자1", labelX, y + 3, 90, 22); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER1_NAME, st->filters.userName1, 115, y, 120, 24); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER1_PATTERN, st->filters.userPattern1, 250, y, 320, 24); CreateAnsiCheck(hwnd, ID_TAIL_FILTER_ANSI_USER1, st->filters.ansiUser1, chkX, y + 1); y += rowH;
         CreateLabel(hwnd, L"사용자2", labelX, y + 3, 90, 22); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER2_NAME, st->filters.userName2, 115, y, 120, 24); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER2_PATTERN, st->filters.userPattern2, 250, y, 320, 24); CreateAnsiCheck(hwnd, ID_TAIL_FILTER_ANSI_USER2, st->filters.ansiUser2, chkX, y + 1); y += rowH;
         CreateLabel(hwnd, L"사용자3", labelX, y + 3, 90, 22); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER3_NAME, st->filters.userName3, 115, y, 120, 24); CreateFilterEdit(hwnd, ID_TAIL_FILTER_USER3_PATTERN, st->filters.userPattern3, 250, y, 320, 24); CreateAnsiCheck(hwnd, ID_TAIL_FILTER_ANSI_USER3, st->filters.ansiUser3, chkX, y + 1); y += rowH + 4;
-        CreateLabel(hwnd, L"ANSI 보기는 검정 배경과 현재 메인 ANSI 테마를 사용합니다. 필터 검사는 ANSI 제거 텍스트로 합니다.", 12, y, 690, 22); y += 22;
+        CreateLabel(hwnd, L"ANSI 보기는 안정성 문제로 임시 보류 중입니다. 현재 갈무리 보기는 ANSI 코드를 제거한 평문으로 표시합니다.", 12, y, 690, 22); y += 22;
         CreateLabel(hwnd, L"잡담 특수값: []: 는 [이름]: 형식, <>: 는 <이름>: 형식입니다.", 12, y, 690, 22);
         CreateWindowExW(0, L"BUTTON", L"기본값", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 410, 470, 80, 28, hwnd, (HMENU)(UINT_PTR)ID_TAIL_FILTER_RESET, GetModuleHandleW(nullptr), nullptr);
         CreateWindowExW(0, L"BUTTON", L"확인", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 505, 470, 80, 28, hwnd, (HMENU)(UINT_PTR)ID_TAIL_FILTER_OK, GetModuleHandleW(nullptr), nullptr);
@@ -1741,15 +1781,15 @@ static LRESULT CALLBACK TailFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         {
             st->filters.chat = GetEditText(hwnd, ID_TAIL_FILTER_CHAT); st->filters.talk = GetEditText(hwnd, ID_TAIL_FILTER_TALK); st->filters.auction = GetEditText(hwnd, ID_TAIL_FILTER_AUCTION); st->filters.item = GetEditText(hwnd, ID_TAIL_FILTER_ITEM); st->filters.exp = GetEditText(hwnd, ID_TAIL_FILTER_EXP);
             st->filters.userName1 = GetEditText(hwnd, ID_TAIL_FILTER_USER1_NAME); st->filters.userPattern1 = GetEditText(hwnd, ID_TAIL_FILTER_USER1_PATTERN); st->filters.userName2 = GetEditText(hwnd, ID_TAIL_FILTER_USER2_NAME); st->filters.userPattern2 = GetEditText(hwnd, ID_TAIL_FILTER_USER2_PATTERN); st->filters.userName3 = GetEditText(hwnd, ID_TAIL_FILTER_USER3_NAME); st->filters.userPattern3 = GetEditText(hwnd, ID_TAIL_FILTER_USER3_PATTERN);
-            st->filters.ansiAll = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_ALL);
-            st->filters.ansiChat = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_CHAT);
-            st->filters.ansiTalk = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_TALK);
-            st->filters.ansiAuction = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_AUCTION);
-            st->filters.ansiItem = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_ITEM);
-            st->filters.ansiExp = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_EXP);
-            st->filters.ansiUser1 = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_USER1);
-            st->filters.ansiUser2 = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_USER2);
-            st->filters.ansiUser3 = IsDlgChecked(hwnd, ID_TAIL_FILTER_ANSI_USER3);
+            st->filters.ansiAll = false;
+            st->filters.ansiChat = false;
+            st->filters.ansiTalk = false;
+            st->filters.ansiAuction = false;
+            st->filters.ansiItem = false;
+            st->filters.ansiExp = false;
+            st->filters.ansiUser1 = false;
+            st->filters.ansiUser2 = false;
+            st->filters.ansiUser3 = false;
             st->accepted = true; DestroyWindow(hwnd); return 0;
         }
         if (LOWORD(wParam) == ID_TAIL_FILTER_CANCEL) { DestroyWindow(hwnd); return 0; }

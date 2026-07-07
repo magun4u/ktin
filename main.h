@@ -196,8 +196,10 @@ struct AppState
     bool isSessionActive = false;
     time_t sessionStartTime = 0;
 
-    HANDLE hFontRes;
-    bool useCustomMudFont;      // 추가
+    HANDLE hFontRes = nullptr;
+    bool privateFontFileRegistered = false;
+    std::wstring privateFontFilePath;
+    bool useCustomMudFont = true;      // 추가
     std::wstring userFontName;  // 추가 (error C2039 해결)
 
     HWND hwndSymbol;       // ★ 추가: 특수기호 창 핸들

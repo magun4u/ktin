@@ -1,4 +1,5 @@
-﻿// ==============================================
+﻿
+// ==============================================
 // main.cpp 20260420
 // ==============================================
 #include "constants.h"
@@ -72,6 +73,21 @@
 // ==============================================
 AppState* g_app = nullptr;
 HMODULE g_hRichEdit = nullptr;
+
+static void LaunchNewKtinWindow(HWND owner)
+{
+    wchar_t exePath[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH) || exePath[0] == L'\0')
+    {
+        MessageBoxW(owner, L"실행 파일 경로를 찾을 수 없습니다.", L"새 창 띄우기", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    HINSTANCE r = ShellExecuteW(owner, L"open", exePath, nullptr, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)r <= 32)
+        MessageBoxW(owner, L"새 KTin 창을 실행하지 못했습니다.", L"새 창 띄우기", MB_OK | MB_ICONERROR);
+}
+
 
 // 누락된 창 이름 변수들
 const wchar_t kMainWindowClass[] = L"TTGuiMainWindow";
@@ -1185,6 +1201,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 SetFocus(hEdit); SendMessageW(hEdit, EM_SETSEL, -1, -1); EnsureVisibleEditCaret(hEdit); ShowCaret(hEdit);
             }
             return 0;
+        case ID_MENU_FILE_NEW_WINDOW:
+            LaunchNewKtinWindow(hwnd);
+            return 0;
+
         case ID_MENU_FILE_QUICK_CONNECT:
             ShowQuickConnectDialog(hwnd);
             return 0;

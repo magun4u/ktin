@@ -88,6 +88,7 @@ static const int ID_MENU_HELP_SHORTCUT = 1021;
 static const int ID_MENU_OPTIONS_CHAT_DOCK = 1022;
 static const int ID_MENU_OPTIONS_CHAT_CAPTURE = 1024;
 static const int ID_MENU_OPTIONS_CHAT_TOGGLE_VISIBLE = 1025;
+static const int ID_MENU_FILE_NEW_WINDOW = 1026;
 
 static const int ID_LOG_COPY = 1101;
 static const int ID_LOG_CLEAR_CHAT = 1102;

@@ -1171,24 +1171,70 @@ void InitStyleFont(LOGFONTW& lf, HWND hwnd, int pointSize)
     lstrcpyW(lf.lfFaceName, L"Mud둥근모");
 }
 
-void RegisterEmbeddedFont() {
-    HRSRC hRes = FindResourceW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDR_MY_CUSTOM_FONT), RT_RCDATA);
-    if (hRes) {
-        HGLOBAL hData = LoadResource(GetModuleHandleW(nullptr), hRes);
-        void* pFontData = LockResource(hData);
-        DWORD fontSize = SizeofResource(GetModuleHandleW(nullptr), hRes);
+void RegisterEmbeddedFont()
+{
+    if (!g_app)
+        return;
 
-        DWORD numFonts = 0;
-        // ★ 반환되는 핸들을 g_app->hFontRes에 저장합니다.
-        g_app->hFontRes = AddFontMemResourceEx(pFontData, fontSize, nullptr, &numFonts);
+    // WM_CREATE와 WinMain 쪽에서 중복 호출될 수 있으므로 한 번만 등록합니다.
+    if (g_app->hFontRes || g_app->privateFontFileRegistered)
+        return;
+
+    HMODULE hMod = GetModuleHandleW(nullptr);
+
+    // 1순위: exe 안에 포함된 MudDunggeunmo-Regular.ttf 리소스 사용
+    HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCEW(IDR_MY_CUSTOM_FONT), RT_RCDATA);
+    if (hRes) {
+        HGLOBAL hData = LoadResource(hMod, hRes);
+        void* pFontData = hData ? LockResource(hData) : nullptr;
+        DWORD fontSize = SizeofResource(hMod, hRes);
+
+        if (pFontData && fontSize > 0) {
+            DWORD numFonts = 0;
+            g_app->hFontRes = AddFontMemResourceEx(pFontData, fontSize, nullptr, &numFonts);
+            if (g_app->hFontRes && numFonts > 0)
+                return;
+        }
+    }
+
+    // 2순위: exe와 같은 폴더의 MudDunggeunmo-Regular.ttf를 현재 프로세스 전용으로 등록
+    // 설치 없이 사용할 수 있지만, 폰트 파일은 exe 옆에 따로 있어야 합니다.
+    wchar_t exePath[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH) || exePath[0] == L'\0')
+        return;
+
+    std::wstring fontPath = exePath;
+    size_t slash = fontPath.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        fontPath.resize(slash + 1);
+    else
+        fontPath.clear();
+    fontPath += L"MudDunggeunmo-Regular.ttf";
+
+    DWORD attr = GetFileAttributesW(fontPath.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
+        return;
+
+    if (AddFontResourceExW(fontPath.c_str(), FR_PRIVATE, nullptr) > 0) {
+        g_app->privateFontFileRegistered = true;
+        g_app->privateFontFilePath = fontPath;
     }
 }
 
-void UnloadEmbeddedFont() {
-    if (g_app && g_app->hFontRes) {
-        // 메모리에 등록했던 폰트를 시스템에서 제거합니다.
+void UnloadEmbeddedFont()
+{
+    if (!g_app)
+        return;
+
+    if (g_app->hFontRes) {
         RemoveFontMemResourceEx(g_app->hFontRes);
         g_app->hFontRes = nullptr;
+    }
+
+    if (g_app->privateFontFileRegistered && !g_app->privateFontFilePath.empty()) {
+        RemoveFontResourceExW(g_app->privateFontFilePath.c_str(), FR_PRIVATE, nullptr);
+        g_app->privateFontFileRegistered = false;
+        g_app->privateFontFilePath.clear();
     }
 }
 
