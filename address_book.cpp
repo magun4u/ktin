@@ -349,11 +349,8 @@ void BeginSwitchToAddressBookEntry(const AddressBookEntry& entry)
     KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
 
     // 기존 세션 강제 종료
-    if (g_app->hasActiveSession) {
-        std::wstring zapCmd = L"#zap {" + g_app->activeSession.name + L"}";
-        SendRawCommandToMud(zapCmd);
-        g_app->hasActiveSession = false;
-    }
+    // buildfix38: 주소록 세션뿐 아니라 빠른연결의 고정 세션명 new도 함께 종료합니다.
+    ZapKnownTinTinSession();
 
     g_app->isConnected = false; // 실제 세션 활성화 메시지를 받을 때 true로 전환
 
@@ -407,6 +404,7 @@ void ConnectAddressBookEntry(const AddressBookEntry& entry)
     // #session 실행
     std::wstring cmd = L"#session {" + sessionName + L"} {" + host + L"} {" + portBuf + L"}";
     SendRawCommandToMud(cmd);
+    MarkKnownTinTinSession(sessionName);
 
     // StartAutoLoginWindowForAddressEntry()에서 이미 초기화했습니다.
 

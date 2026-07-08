@@ -317,7 +317,6 @@ void CreateMainMenu(HWND hwnd)
     AddODItem(hMenuView, ID_MENU_THEME_DIALOG, L"ANSI 테마 선택...(&T)");
     AddODItem(hMenuView, ID_MENU_OPTIONS_FIT_WINDOW, L"화면 여백 없애기(&S)");
     AppendMenuW(hMenuView, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenuView, MF_SEPARATOR, 0, nullptr);
     AddODItem(hMenuView, ID_MENU_VIEW_SYMBOLS, L"특수 기호...(&S)\tF4");
 
     AddODItem(hMenuOptions, ID_MENU_SETTINGS, L"환경 설정...(&O)");

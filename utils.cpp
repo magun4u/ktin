@@ -765,6 +765,54 @@ void SendRawCommandToMud(const std::wstring& text)
     SendCommandToProcess(text);
 }
 
+void MarkKnownTinTinSession(const std::wstring& sessionName)
+{
+    if (!g_app) return;
+
+    std::wstring name = Trim(sessionName);
+    if (name.empty()) return;
+
+    g_app->activeTinTinSessionName = name;
+    g_app->hasActiveTinTinSession = true;
+}
+
+void ResetKnownTinTinSession()
+{
+    if (!g_app) return;
+
+    g_app->activeTinTinSessionName.clear();
+    g_app->hasActiveTinTinSession = false;
+    g_app->isConnected = false;
+    g_app->isSessionActive = false;
+}
+
+bool ZapKnownTinTinSession()
+{
+    if (!g_app) return false;
+
+    std::wstring sessionName;
+
+    if (g_app->hasActiveTinTinSession)
+        sessionName = Trim(g_app->activeTinTinSessionName);
+
+    if (sessionName.empty() && g_app->hasActiveSession)
+        sessionName = Trim(g_app->activeSession.name);
+
+    if (sessionName.empty())
+        return false;
+
+    SendRawCommandToMud(L"#zap {" + sessionName + L"}");
+
+    g_app->activeTinTinSessionName.clear();
+    g_app->hasActiveTinTinSession = false;
+    g_app->hasActiveSession = false;
+    g_app->isConnected = false;
+    g_app->isSessionActive = false;
+    g_app->autoLoginWindowActive = false;
+
+    return true;
+}
+
 void SendKeepAliveNow()
 {
     if (!g_app || !g_app->keepAliveEnabled)

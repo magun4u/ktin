@@ -183,9 +183,18 @@ struct AppState
     AddressBookEntry activeSession; // ★ 신규 추가: 현재/마지막으로 접속에 사용한 주소록 정보
     bool hasActiveSession = false;  // ★ 신규 추가: 활성화된 주소록 정보가 있는지 여부
 
+    // buildfix38: 주소록뿐 아니라 빠른연결(#session new)도 실제 TinTin++ 세션명으로 추적합니다.
+    std::wstring activeTinTinSessionName;
+    bool hasActiveTinTinSession = false;
+
     // ★ 신규 추가: 주소록에서 다른 서버로 전환 접속할 때 잠시 보관할 대상
     AddressBookEntry pendingConnectEntry;
     bool hasPendingConnect = false;
+
+    // buildfix38: 빠른연결 전환 때 기존 new 세션을 닫은 뒤 500ms 후 재접속하기 위한 보관값입니다.
+    std::wstring pendingQuickCharsetCommand;
+    std::wstring pendingQuickConnectCommand;
+    bool hasPendingQuickConnect = false;
 
     int statusPartCount = 1;             // 분할 개수 (1~5개)
     std::wstring statusFormats[5];

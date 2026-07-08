@@ -318,6 +318,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
 static bool s_logDragging = false;
 static POINT s_logMouseDownPt = { 0, 0 };
+static POINT s_logLastMouseClientPt = { 0, 0 };
+static const UINT_PTR ID_TIMER_LOG_DRAG_SCROLL = 30021;
+static const UINT LOG_DRAG_SCROLL_INTERVAL_MS = 50;
 FindState g_findState;
 
 struct LogChunk {
@@ -1246,12 +1249,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
         case ID_MENU_FILE_ZAP:
-            // ★ 무작정 #zap을 날리지 않고, 연결된 세션이 있을 때만 정확히 종료합니다.
-            if (g_app->hasActiveSession) {
-                std::wstring zapCmd = L"#zap {" + g_app->activeSession.name + L"}";
-                SendRawCommandToMud(zapCmd);
-                g_app->hasActiveSession = false;
-            }
+            // buildfix38: 주소록 세션뿐 아니라 빠른연결의 new 세션도 종료합니다.
+            ZapKnownTinTinSession();
+            g_app->hasPendingQuickConnect = false;
+            KillTimer(hwnd, ID_TIMER_SWITCH_QUICK_CONNECT);
             g_app->isConnected = false;
 
             if (g_app && g_app->hwndEdit[g_app->activeEditIndex]) {
@@ -1471,6 +1472,27 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 AddressBookEntry entry = g_app->pendingConnectEntry;
                 g_app->hasPendingConnect = false;
                 ConnectAddressBookEntry(entry);
+            }
+            return 0;
+        }
+
+        if (wParam == ID_TIMER_SWITCH_QUICK_CONNECT) {
+            KillTimer(hwnd, ID_TIMER_SWITCH_QUICK_CONNECT);
+
+            if (g_app && g_app->hasPendingQuickConnect) {
+                std::wstring charsetCmd = g_app->pendingQuickCharsetCommand;
+                std::wstring sessionCmd = g_app->pendingQuickConnectCommand;
+
+                g_app->pendingQuickCharsetCommand.clear();
+                g_app->pendingQuickConnectCommand.clear();
+                g_app->hasPendingQuickConnect = false;
+
+                if (!Trim(charsetCmd).empty())
+                    SendRawCommandToMud(charsetCmd);
+                if (!Trim(sessionCmd).empty()) {
+                    SendRawCommandToMud(sessionCmd);
+                    MarkKnownTinTinSession(L"new");
+                }
             }
             return 0;
         }
@@ -1810,6 +1832,66 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+
+static int GetLogDragAutoScrollLines(int y, int viewTop, int viewBottom, int cellHeight)
+{
+    if (cellHeight <= 0)
+        cellHeight = 1;
+
+    if (y < viewTop)
+    {
+        int dist = viewTop - y;
+        if (dist > cellHeight * 4) return 4;
+        if (dist > cellHeight * 2) return 2;
+        return 1;
+    }
+
+    if (y > viewBottom)
+    {
+        int dist = y - viewBottom;
+        if (dist > cellHeight * 4) return -4;
+        if (dist > cellHeight * 2) return -2;
+        return -1;
+    }
+
+    return 0;
+}
+
+static bool UpdateLogDragSelectionFromClientPoint(HWND hwnd, int x, int y, bool allowAutoScroll)
+{
+    if (!g_app || !g_app->termBuffer)
+        return false;
+
+    SIZE cell = GetLogCellPixelSize(hwnd);
+    if (cell.cx <= 0 || cell.cy <= 0)
+        return false;
+
+    int offsetX = 0;
+    int offsetY = 0;
+    GetTerminalOffset(hwnd, offsetX, offsetY);
+
+    int viewTop = offsetY;
+    int viewBottom = offsetY + g_app->termBuffer->height * cell.cy - 1;
+
+    if (allowAutoScroll)
+    {
+        int lines = GetLogDragAutoScrollLines(y, viewTop, viewBottom, cell.cy);
+        if (lines != 0)
+            g_app->termBuffer->DoScroll(lines);
+    }
+
+    int col = (x - offsetX) / cell.cx;
+    int row = (y - offsetY) / cell.cy;
+
+    col = ClampInt(col, 0, g_app->termBuffer->width - 1);
+    row = ClampInt(row, 0, g_app->termBuffer->height - 1);
+
+    int absY = (int)g_app->termBuffer->history.size() + row - g_app->termBuffer->scrollOffset;
+    g_app->termBuffer->SetSelectionEnd(col, absY);
+    InvalidateRect(hwnd, nullptr, TRUE);
+    return true;
+}
+
 static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -2099,6 +2181,7 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 
             int x = GET_X_LPARAM(lParam);
             int y = GET_Y_LPARAM(lParam);
+            s_logLastMouseClientPt = { x, y };
 
             SIZE cell = GetLogCellPixelSize(hwnd);
             int offsetX, offsetY;
@@ -2114,6 +2197,7 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             g_app->termBuffer->SetSelectionStart(col, absY);
             s_logDragging = true;
             s_logMouseDownPt = { col, absY };
+            SetTimer(hwnd, ID_TIMER_LOG_DRAG_SCROLL, LOG_DRAG_SCROLL_INTERVAL_MS, nullptr);
             InvalidateRect(hwnd, nullptr, TRUE);
         }
         return 0;
@@ -2125,20 +2209,8 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         {
             int x = GET_X_LPARAM(lParam);
             int y = GET_Y_LPARAM(lParam);
-
-            SIZE cell = GetLogCellPixelSize(hwnd);
-            int offsetX, offsetY;
-            GetTerminalOffset(hwnd, offsetX, offsetY);
-
-            int col = (x - offsetX) / cell.cx;
-            int row = (y - offsetY) / cell.cy;
-
-            col = ClampInt(col, 0, g_app->termBuffer->width - 1);
-            row = ClampInt(row, 0, g_app->termBuffer->height - 1);
-
-            int absY = (int)g_app->termBuffer->history.size() + row - g_app->termBuffer->scrollOffset;
-            g_app->termBuffer->SetSelectionEnd(col, absY);
-            InvalidateRect(hwnd, nullptr, TRUE);
+            s_logLastMouseClientPt = { x, y };
+            UpdateLogDragSelectionFromClientPoint(hwnd, x, y, true);
         }
 
         return 0;
@@ -2160,12 +2232,19 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     case WM_LBUTTONUP:
     {
         if (s_logDragging && g_app && g_app->termBuffer) {
+            KillTimer(hwnd, ID_TIMER_LOG_DRAG_SCROLL);
             ReleaseCapture(); s_logDragging = false;
             int x = GET_X_LPARAM(lParam), y = GET_Y_LPARAM(lParam);
+            s_logLastMouseClientPt = { x, y };
+
             SIZE cell = GetLogCellPixelSize(hwnd);
             int offsetX, offsetY; GetTerminalOffset(hwnd, offsetX, offsetY); // ★ 정렬 방식 적용
             int col = (x - offsetX) / cell.cx, row = (y - offsetY) / cell.cy;
+            col = ClampInt(col, 0, g_app->termBuffer->width - 1);
+            row = ClampInt(row, 0, g_app->termBuffer->height - 1);
+
             int absY = (int)g_app->termBuffer->history.size() + row - g_app->termBuffer->scrollOffset;
+            g_app->termBuffer->SetSelectionEnd(col, absY);
 
             if (s_logMouseDownPt.x == col && s_logMouseDownPt.y == absY) {
                 g_app->termBuffer->ClearSelection();
@@ -2176,6 +2255,17 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                 }
             }
             InvalidateRect(hwnd, nullptr, TRUE);
+        }
+        return 0;
+    }
+
+    case WM_CAPTURECHANGED:
+    case WM_CANCELMODE:
+    {
+        if (s_logDragging)
+        {
+            KillTimer(hwnd, ID_TIMER_LOG_DRAG_SCROLL);
+            s_logDragging = false;
         }
         return 0;
     }
@@ -2192,7 +2282,6 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             }
 
             AppendMenuW(hMenu, MF_STRING, ID_LOG_COPY, L"복사하기");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
             POINT pt;
             GetCursorPos(&pt);
@@ -2257,6 +2346,22 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             SendMessageW(GetParent(hwnd), WM_COMMAND, wParam, lParam);
             return 0;
         }
+    }
+
+
+    case WM_TIMER:
+    {
+        if (wParam == ID_TIMER_LOG_DRAG_SCROLL)
+        {
+            if (s_logDragging && g_app && g_app->termBuffer)
+                UpdateLogDragSelectionFromClientPoint(hwnd, s_logLastMouseClientPt.x, s_logLastMouseClientPt.y, true);
+            else
+                KillTimer(hwnd, ID_TIMER_LOG_DRAG_SCROLL);
+
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
 
