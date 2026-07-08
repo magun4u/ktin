@@ -295,22 +295,39 @@ static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 g_app->quickConnectHistory.insert(g_app->quickConnectHistory.begin(), { addr, charset });
                 SaveQuickConnectHistory();
 
+                KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+                KillTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT);
+
+                // buildfix38: 빠른연결도 기존 세션을 먼저 종료합니다.
+                // 특히 빠른연결은 #session new 를 쓰기 때문에 기존 new 세션이 남아 있으면
+                // 다음 접속이 같은 세션명 충돌로 실패하거나 이전 세션이 살아 있을 수 있습니다.
+                bool zapped = ZapKnownTinTinSession();
+
                 // 빠른 연결은 전역 자동 로그인 설정을 접속 후 60초 동안만 검사합니다.
                 StartAutoLoginWindowFromGlobal();
 
                 // 빠른 연결은 주소록 세션이 아니므로 activeSession은 비움
                 g_app->hasActiveSession = false;
 
-                KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
-
                 // 문자셋 설정 먼저 전송
                 std::wstring charsetCmd = (charset == 1)
                     ? L"#CONFIG {CHARSET} {CP949TOUTF8}"
                     : L"#CONFIG {CHARSET} {UTF-8}";
-                SendRawCommandToMud(charsetCmd);
+                std::wstring sessionCmd = L"#session new " + addr;
 
-                // #session new 로 전송
-                SendRawCommandToMud(L"#session new " + addr);
+                if (zapped) {
+                    // #zap 처리 후 바로 같은 이름(new)으로 #session을 열면 충돌할 수 있으므로
+                    // 주소록 전환과 같은 방식으로 잠깐 늦춰 실행합니다.
+                    g_app->pendingQuickCharsetCommand = charsetCmd;
+                    g_app->pendingQuickConnectCommand = sessionCmd;
+                    g_app->hasPendingQuickConnect = true;
+                    SetTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT, 500, nullptr);
+                }
+                else {
+                    SendRawCommandToMud(charsetCmd);
+                    SendRawCommandToMud(sessionCmd);
+                    MarkKnownTinTinSession(L"new");
+                }
 
                 // StartAutoLoginWindowFromGlobal()에서 이미 초기화했습니다.
             }

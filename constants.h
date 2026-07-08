@@ -97,6 +97,7 @@ static const int ID_TIMER_KEEPALIVE = 2002;
 static const int ID_TIMER_LOG_REDRAW = 2003;
 static const int ID_TIMER_AUTORECONNECT = 2004;
 static const int ID_TIMER_SWITCH_CONNECT = 2005;
+static const int ID_TIMER_SWITCH_QUICK_CONNECT = 2006;
 
 // 타이머 엔진 구동용 Win32 타이머 ID
 static const int ID_TIMER_USER_ENGINE = 2010;
