@@ -172,7 +172,6 @@ bool ShiftInputViewNewer()
     int n = (int)g_app->history.size();
     if (n <= 0) return false;
 
-    int a = g_app->displayedHistoryIndex[0];
     int b = g_app->displayedHistoryIndex[1];
     int c = g_app->displayedHistoryIndex[2];
 
@@ -279,6 +278,7 @@ LRESULT CALLBACK InputContainerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     {
         HDC hdc = (HDC)wParam;
         HWND hEdit = (HWND)lParam;
+        (void)hEdit;
         COLORREF back = g_app ? g_app->inputStyle.backColor : RGB(20, 20, 20);
         COLORREF text = g_app ? g_app->inputStyle.textColor : RGB(230, 230, 230);
 
@@ -337,4 +337,3 @@ void ExecuteShortcutButton(int idx)
     }
     if (g_app->hwndEdit[g_app->activeEditIndex]) SetFocus(g_app->hwndEdit[g_app->activeEditIndex]);
 }
-

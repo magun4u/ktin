@@ -292,7 +292,6 @@ static void SyncTimerDataFromUI(HWND hwnd, int idx)
     GetWindowTextW(GetDlgItem(hwnd, ID_TIMER_EDIT_NAME), buf, 1024); t.name = buf;
     GetWindowTextW(GetDlgItem(hwnd, ID_TIMER_EDIT_GROUP), buf, 1024); t.groupPath = buf;
 
-    bool wasEnabled = t.enabled;
     t.enabled = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_ENABLE), BM_GETCHECK, 0, 0) == BST_CHECKED);
     t.repeat = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_REPEAT), BM_GETCHECK, 0, 0) == BST_CHECKED);
     t.autoStart = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_AUTOSTART), BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -567,7 +566,7 @@ void PromptTimerDialog(HWND owner)
     const wchar_t kClass[] = L"TTGuiTimerPopupClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = TimerDialogProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = TimerDialogProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass; wc.hCursor = LoadCursor(0, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;
     }

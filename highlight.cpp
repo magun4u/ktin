@@ -123,7 +123,7 @@ void ShowHighlightDialog(HWND owner) {
     static const wchar_t* kClass = L"TTGuiHighlightClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = HighlightDialogProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = HighlightDialogProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass; wc.hCursor = LoadCursor(0, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;
     }
@@ -304,7 +304,13 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         else if (id == ID_HI_DET_BROWSE && s_sel >= 0) {
             wchar_t f[MAX_PATH] = { 0 };
-            OPENFILENAMEW of = { sizeof(of), hwnd, 0, L"Audio Files (*.wav;*.mp3)\0*.wav;*.mp3\0All Files (*.*)\0*.*\0", 0, 0, 1, f, MAX_PATH };
+            OPENFILENAMEW of = {};
+            of.lStructSize = sizeof(of);
+            of.hwndOwner = hwnd;
+            of.lpstrFilter = L"Audio Files (*.wav;*.mp3)\0*.wav;*.mp3\0All Files (*.*)\0*.*\0";
+            of.nFilterIndex = 1;
+            of.lpstrFile = f;
+            of.nMaxFile = MAX_PATH;
             if (GetOpenFileNameW(&of)) {
                 SetWindowTextW(GetDlgItem(hwnd, ID_HI_DET_PATH), f);
             }
@@ -465,5 +471,4 @@ void SyncHiDataFromUI(HWND hwnd, int idx) {
     GetWindowTextW(GetDlgItem(hwnd, ID_HI_DET_CMD), b, 1024); r.command = b;
     GetWindowTextW(GetDlgItem(hwnd, ID_HI_DET_PATH), b, 1024); r.soundPath = b;
 }
-
 

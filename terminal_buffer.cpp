@@ -23,7 +23,7 @@ int GetTerminalGlyphWidth(wchar_t ch, bool forceAmbiguousWide)
         return 1;
 
     // 1) ASCII는 항상 1칸
-    if (ch >= 0x0000 && ch <= 0x007F)
+    if (ch <= 0x007F)
         return 1;
 
     // 2) 한글·전각 공백·한자는 항상 2칸
@@ -378,9 +378,22 @@ bool GetConPtyApi(PFN_CreatePseudoConsole* createFn, PFN_ResizePseudoConsole* re
     HMODULE hKernel = GetModuleHandleW(L"kernel32.dll");
     if (!hKernel) return false;
 
-    *createFn = reinterpret_cast<PFN_CreatePseudoConsole>(GetProcAddress(hKernel, "CreatePseudoConsole"));
-    *resizeFn = reinterpret_cast<PFN_ResizePseudoConsole>(GetProcAddress(hKernel, "ResizePseudoConsole"));
-    *closeFn = reinterpret_cast<PFN_ClosePseudoConsole>(GetProcAddress(hKernel, "ClosePseudoConsole"));
+    union {
+        FARPROC raw;
+        PFN_CreatePseudoConsole typed;
+    } createProc = { GetProcAddress(hKernel, "CreatePseudoConsole") };
+    union {
+        FARPROC raw;
+        PFN_ResizePseudoConsole typed;
+    } resizeProc = { GetProcAddress(hKernel, "ResizePseudoConsole") };
+    union {
+        FARPROC raw;
+        PFN_ClosePseudoConsole typed;
+    } closeProc = { GetProcAddress(hKernel, "ClosePseudoConsole") };
+
+    *createFn = createProc.typed;
+    *resizeFn = resizeProc.typed;
+    *closeFn = closeProc.typed;
 
     return (*createFn != nullptr && *resizeFn != nullptr && *closeFn != nullptr);
 }
@@ -562,8 +575,10 @@ void TerminalBuffer::HandleCommand(char cmd, const std::string& params) {
     }
     else if (cmd == 'H' || cmd == 'f') {
         int r = ArgOr(0, 1) - 1, c = ArgOr(1, 1) - 1;
-        if (r < 0) r = 0; if (c < 0) c = 0;
-        if (r >= height) r = height - 1; if (c >= width) c = width - 1;
+        if (r < 0) r = 0;
+        if (c < 0) c = 0;
+        if (r >= height) r = height - 1;
+        if (c >= width) c = width - 1;
         cursorY = r; cursorX = c; NormalizeCursorForWrite();
     }
     else if (cmd == 'A') { cursorY -= ArgOr(0, 1); if (cursorY < 0) cursorY = 0; NormalizeCursorForWrite(); }

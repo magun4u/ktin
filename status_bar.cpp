@@ -165,7 +165,7 @@ void PromptStatusBarDialog(HWND owner) {
     static const wchar_t* kClass = L"TTStatusBarSettingClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 };
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = StatusBarSettingProc;
         wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass;
@@ -242,6 +242,8 @@ std::wstring ExpandStatusVariables(const std::wstring& format) {
 
 void CreateMainMenu(HWND hwnd)
 {
+    (void)hwnd;
+
     HMENU hMenuBar = CreateMenu();
     HMENU hMenuFile = CreatePopupMenu();
     HMENU hMenuEdit = CreatePopupMenu();

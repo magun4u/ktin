@@ -1,3 +1,5 @@
+#define KTIN_MEMO_LOCAL_IMPL 1
+
 #include "constants.h"
 #include "types.h"
 #include "main.h"
@@ -24,6 +26,15 @@ static FILETIME s_memoUserKeywordsFt = {};
 static HWND s_hwndMemoBusyPopup = nullptr;
 static LRESULT CALLBACK MemoEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+static bool MemoOpenFile(HWND hwnd, const std::wstring& path);
+static bool MemoSaveFile(HWND hwnd, const std::wstring& path);
+static void UpdateMemoTitle();
+void UpdateMemoStatus();
+static void MarkMemoDirty(bool dirty);
+static void ApplyMemoFontAndFormat();
+static void ApplyMemoSyntaxHighlight(HWND hwndEdit);
+static void SetMemoThemeBaseColors(int themeIdx);
+static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 struct AutoSaveFile {
     std::wstring path;
@@ -464,7 +475,7 @@ static void MemoAutoSave()
     std::wstring text = GetWindowTextString(g_memo.hwndEdit);
     std::string utf8 = WideToUtf8(text);
 
-    std::ofstream ofs(autoSavePath, std::ios::binary);
+    std::ofstream ofs(autoSavePath.c_str(), std::ios::binary);
     if (ofs) {
         const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
         ofs.write((const char*)bom, 3);
@@ -554,7 +565,7 @@ static bool PromptMemoLoadAutoSave(HWND owner, std::wstring& outPath)
         });
 
     static bool reg = false;
-    if (!reg) { WNDCLASSW wc = { 0 }; wc.lpfnWndProc = AutoSaveListProc; wc.lpszClassName = L"TTAUtoSaveList"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
+    if (!reg) { WNDCLASSW wc = {}; wc.lpfnWndProc = AutoSaveListProc; wc.lpszClassName = L"TTAUtoSaveList"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
 
     AutoSaveListState st = { &outPath, false, files };
     RECT rc; GetWindowRect(owner, &rc);
@@ -1407,7 +1418,7 @@ static void LoadMemoUserKeywords()
 
     // 파일이 없으면 생성만 해둠
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::wofstream create(path);
+        std::wofstream create(path.c_str());
         create << L"Member\nObserver";
         create.close();
     }
@@ -1425,7 +1436,7 @@ static void LoadMemoUserKeywords()
 
     std::vector<std::wstring> newKeywords;
 
-    std::wifstream wifs(path);
+    std::wifstream wifs(path.c_str());
     wifs.imbue(std::locale("korean"));
 
     std::wstring wline;
@@ -1440,7 +1451,7 @@ static void LoadMemoUserKeywords()
     s_memoUserKeywordsLoaded = true;
 }
 
-static void MemoReplaceSelection(HWND hEdit, const std::wstring& s)
+[[maybe_unused]] static void MemoReplaceSelection(HWND hEdit, const std::wstring& s)
 {
     SendMessageW(hEdit, EM_REPLACESEL, TRUE, (LPARAM)s.c_str());
 }
@@ -1450,14 +1461,14 @@ static LONG MemoLineIndexFromLine(HWND hEdit, int line)
     return (LONG)SendMessageW(hEdit, EM_LINEINDEX, line, 0);
 }
 
-static int MemoGetLineLength(HWND hEdit, int line)
+[[maybe_unused]] static int MemoGetLineLength(HWND hEdit, int line)
 {
     LONG start = MemoLineIndexFromLine(hEdit, line);
     if (start < 0) return 0;
     return (int)SendMessageW(hEdit, EM_LINELENGTH, start, 0);
 }
 
-static void MemoSyncDrawPosition(HWND hEdit)
+[[maybe_unused]] static void MemoSyncDrawPosition(HWND hEdit)
 {
     int line = 0, col = 0;
     MemoGetCaretGrid(hEdit, line, col);
@@ -1470,7 +1481,7 @@ static void MemoSyncDrawPosition(HWND hEdit)
     g_memo.drawPosValid = true;
 }
 
-static void MemoColumnInsertChar(HWND hEdit, int startLine, int endLine, int visualCol, wchar_t ch)
+[[maybe_unused]] static void MemoColumnInsertChar(HWND hEdit, int startLine, int endLine, int visualCol, wchar_t ch)
 {
     SendMessageW(hEdit, WM_SETREDRAW, FALSE, 0);
 
@@ -1505,7 +1516,7 @@ static void MemoColumnInsertChar(HWND hEdit, int startLine, int endLine, int vis
     InvalidateRect(hEdit, nullptr, TRUE);
 }
 
-static void MemoColumnDeleteChar(HWND hEdit, int startLine, int endLine, int visualCol, bool isBackspace)
+[[maybe_unused]] static void MemoColumnDeleteChar(HWND hEdit, int startLine, int endLine, int visualCol, bool isBackspace)
 {
     if (isBackspace && visualCol == 0) return; // 0열에서 백스페이스 시 줄이 합쳐지는 것 방지
 
@@ -1641,7 +1652,7 @@ static LRESULT CALLBACK AutoSaveIntervalProc(HWND hwnd, UINT msg, WPARAM wParam,
 
 static bool PromptMemoAutoSaveInterval(HWND owner, int& sec) {
     static bool reg = false;
-    if (!reg) { WNDCLASSW wc = { 0 }; wc.lpfnWndProc = AutoSaveIntervalProc; wc.lpszClassName = L"TTAUtoSaveInt"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
+    if (!reg) { WNDCLASSW wc = {}; wc.lpfnWndProc = AutoSaveIntervalProc; wc.lpszClassName = L"TTAUtoSaveInt"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
     AutoSaveIntervalState st = { &sec, false };
     RECT rc; GetWindowRect(owner, &rc);
     HWND hDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"TTAUtoSaveInt", L"자동저장 설정", WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, rc.left + 50, rc.top + 50, 300, 130, owner, 0, 0, &st);
@@ -1764,7 +1775,7 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         // 행 번호 창 생성
         static bool regLine = false;
         if (!regLine) {
-            WNDCLASSW wc = { 0 }; wc.lpfnWndProc = MemoLineNumProc; wc.hInstance = GetModuleHandle(0);
+            WNDCLASSW wc = {}; wc.lpfnWndProc = MemoLineNumProc; wc.hInstance = GetModuleHandle(0);
             wc.lpszClassName = L"TTMemoLineNum"; wc.hCursor = LoadCursor(0, IDC_ARROW);
             RegisterClassW(&wc); regLine = true;
         }
@@ -2332,16 +2343,16 @@ static LRESULT CALLBACK LineSelectPopupProc(HWND hwnd, UINT msg, WPARAM wParam, 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-static bool ShowLineSelectDialog(HWND owner) {
+[[maybe_unused]] static bool ShowLineSelectDialog(HWND owner) {
     static const wchar_t* kCls = L"LineSelectPopup";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = LineSelectPopupProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = LineSelectPopupProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kCls; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClassW(&wc); reg = true;
     }
 
-    RECT rc = { 0 }; if (owner) GetWindowRect(owner, &rc);
+    RECT rc = {}; if (owner) GetWindowRect(owner, &rc);
 
     HWND hDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, L"선 모양 선택 (Enter/Esc)",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -2555,6 +2566,9 @@ static bool HandleMemoShortcutKey(UINT msg, WPARAM wParam)
 static LRESULT CALLBACK MemoEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
+    (void)uIdSubclass;
+    (void)dwRefData;
+
     if (HandleMemoShortcutKey(msg, wParam))
         return 0;
 
@@ -2620,7 +2634,7 @@ static LRESULT CALLBACK MemoEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
 
 static bool MemoOpenFile(HWND hwnd, const std::wstring& path)
 {
-    std::ifstream ifs(path, std::ios::binary);
+    std::ifstream ifs(path.c_str(), std::ios::binary);
     if (!ifs) return false;
 
     // 1. 파일 데이터 통째로 읽기
@@ -2727,8 +2741,10 @@ static bool MemoOpenFile(HWND hwnd, const std::wstring& path)
 
 static bool MemoSaveFile(HWND hwnd, const std::wstring& path)
 {
+    (void)hwnd;
+
     std::wstring text = GetWindowTextString(g_memo.hwndEdit);
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     if (!ofs) return false;
 
     if (g_memo.encodingType == 0) { // UTF-8
@@ -3160,6 +3176,8 @@ static void ApplyMemoSyntaxHighlight(HWND hwndEdit)
 // ==============================================
 void OpenMemoWindow(HWND owner)
 {
+    (void)owner;
+
     EnsureRichEditLoaded();
     LoadMemoWindowSettings();
 

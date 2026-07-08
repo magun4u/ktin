@@ -34,7 +34,7 @@ static bool IsAnyPatternLine(const std::wstring& line,
     return ContainsTextI(line, p1) || ContainsTextI(line, p2) || ContainsTextI(line, p3);
 }
 
-static bool IsAutoLoginIdFailLine(const std::wstring& line)
+[[maybe_unused]] static bool IsAutoLoginIdFailLine(const std::wstring& line)
 {
     if (!g_app) return false;
 
@@ -52,7 +52,7 @@ static bool IsAutoLoginIdFailLine(const std::wstring& line)
         L"");
 }
 
-static bool IsAutoLoginPwFailLine(const std::wstring& line)
+[[maybe_unused]] static bool IsAutoLoginPwFailLine(const std::wstring& line)
 {
     if (!g_app) return false;
 

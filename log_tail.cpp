@@ -186,10 +186,8 @@ static std::wstring TailModeTitleRaw(int mode)
     }
 }
 
-static std::wstring TailModeTitle(int mode)
+[[maybe_unused]] static std::wstring TailModeTitle(int mode)
 {
-    if (!g_tailFiltersLoaded)
-        ;
     return TailModeTitleRaw(mode);
 }
 
@@ -1237,7 +1235,6 @@ static void TailAdjustRectToWorkArea(RECT& rc, bool snappedAbove, const RECT& ta
         return;
 
     int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
     const int minH = 120;
 
     if (snappedAbove && rc.top < mi.rcWork.top)
@@ -1722,7 +1719,7 @@ static HWND CreateAnsiCheck(HWND hwnd, int id, bool /*checked*/, int x, int y)
     return chk;
 }
 
-static bool IsDlgChecked(HWND hwnd, int id)
+[[maybe_unused]] static bool IsDlgChecked(HWND hwnd, int id)
 {
     return SendMessageW(GetDlgItem(hwnd, id), BM_GETCHECK, 0, 0) == BST_CHECKED;
 }

@@ -2,6 +2,8 @@
 // ==============================================
 // main.cpp 20260420
 // ==============================================
+#define KTIN_MAIN_LOCAL_IMPL 1
+
 #include "constants.h"
 #include "types.h"
 // 1. 프로젝트 핵심 헤더 (가장 먼저!)
@@ -55,12 +57,14 @@
 #include <vector>
 
 // 5. 라이브러리 링크
+#ifdef _MSC_VER
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(linker, \
 "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#endif
 
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x00020016
@@ -97,6 +101,19 @@ const wchar_t* kInputContainerClass = L"TintinInputContainer";
 const wchar_t* kShortcutBarClass = L"TintinShortcutBar";
 const wchar_t* kStatusBarClass = L"TintinStatusBar";
 
+[[maybe_unused]] static void ShowHighlightDialog(HWND owner);
+static void ReaderThreadProc(HWND hwndMain, HANDLE hRead);
+static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static std::wstring GetInputRowText(int row);
+static bool ShiftInputViewOlder();
+static bool ShiftInputViewNewer();
+static LRESULT CALLBACK InputContainerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK ShortcutBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static std::wstring ExpandStatusVariables(const std::wstring& format);
+static LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+[[maybe_unused]] static LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 // 프로세스 종료 함수
 void StopProcessAndThread() {
     if (!g_app) return;
@@ -130,7 +147,8 @@ bool StartTinTinProcess() {
     if (FAILED(createFn(ptySize, inputRead, outputWrite, 0, &hPC))) return false;
     CloseHandle(inputRead); CloseHandle(outputWrite);
     SIZE_T attrListSize = 0; InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
-    STARTUPINFOEXW si = { sizeof(si) };
+    STARTUPINFOEXW si = {};
+    si.StartupInfo.cb = sizeof(si);
     si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attrListSize);
     if (!si.lpAttributeList || !InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attrListSize)) return false;
     if (!UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hPC, sizeof(hPC), nullptr, nullptr)) return false;
@@ -513,7 +531,13 @@ static LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, 
         }
         else if (id == ID_HI_DET_BROWSE && s_sel >= 0) {
             wchar_t f[MAX_PATH] = { 0 };
-            OPENFILENAMEW of = { sizeof(of), hwnd, 0, L"Audio Files (*.wav;*.mp3)\0*.wav;*.mp3\0All Files (*.*)\0*.*\0", 0, 0, 1, f, MAX_PATH };
+            OPENFILENAMEW of = {};
+            of.lStructSize = sizeof(of);
+            of.hwndOwner = hwnd;
+            of.lpstrFilter = L"Audio Files (*.wav;*.mp3)\0*.wav;*.mp3\0All Files (*.*)\0*.*\0";
+            of.nFilterIndex = 1;
+            of.lpstrFile = f;
+            of.nMaxFile = MAX_PATH;
             if (GetOpenFileNameW(&of)) {
                 SetWindowTextW(GetDlgItem(hwnd, ID_HI_DET_PATH), f);
             }
@@ -627,11 +651,11 @@ static LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, 
 }
 
 
-static void ShowHighlightDialog(HWND owner) {
+[[maybe_unused]] static void ShowHighlightDialog(HWND owner) {
     static const wchar_t* kClass = L"TTGuiHighlightClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = HighlightDialogProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = HighlightDialogProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass; wc.hCursor = LoadCursor(0, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;
     }
@@ -1949,6 +1973,8 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                     }
 
                 fg_done:
+                    (void)drawBg;
+
                     RECT cellRc{};
                     int cw = GetCharWidthW(c.ch);
                     if (cw < 1) cw = 1;
@@ -2038,7 +2064,10 @@ static LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         case SB_PAGEUP: g_app->termBuffer->DoScroll(g_app->termBuffer->height / 2); break;
         case SB_PAGEDOWN: g_app->termBuffer->DoScroll(-(g_app->termBuffer->height / 2)); break;
         case SB_THUMBTRACK: {
-            SCROLLINFO si = { sizeof(si), SIF_TRACKPOS }; GetScrollInfo(hwnd, SB_VERT, &si);
+            SCROLLINFO si = {};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_TRACKPOS;
+            GetScrollInfo(hwnd, SB_VERT, &si);
             g_app->termBuffer->scrollOffset = (int)g_app->termBuffer->history.size() - si.nTrackPos;
             break;
         }
@@ -2287,7 +2316,6 @@ static bool ShiftInputViewNewer()
     if (n <= 0)
         return false;
 
-    int a = g_app->displayedHistoryIndex[0];
     int b = g_app->displayedHistoryIndex[1];
     int c = g_app->displayedHistoryIndex[2];
 
@@ -3022,7 +3050,7 @@ static LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 // ==============================================
 // ChatFloatWndProc
 // ==============================================
-static LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+[[maybe_unused]] static LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_SIZE:
         if (g_app && g_app->hwndChat && GetParent(g_app->hwndChat) == hwnd) {
@@ -3043,4 +3071,3 @@ static LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
-

@@ -254,15 +254,19 @@ extern void LayoutInputEdits();
 
 
 // 메인 윈도우 콜백 및 주요 함수
+#ifndef KTIN_MAIN_LOCAL_IMPL
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK TerminalWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK ChatEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#ifndef KTIN_MAIN_LOCAL_IMPL
 LRESULT CALLBACK InputContainerProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK ShortcutBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void ReaderThreadProc(HWND hwndMain, HANDLE hRead);
+#endif
 
 void LayoutChildren(HWND hwnd);
 void ApplyStyles();

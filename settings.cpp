@@ -50,10 +50,10 @@ void UpdateSettingPreviews(HWND hwnd) {
     const wchar_t* logFace = g_app->useCustomMudFont ? L"Mud둥근모" : g_app->logStyle.font.lfFaceName;
     const wchar_t* inpFace = g_app->useCustomMudFont ? L"Mud둥근모" : g_app->inputStyle.font.lfFaceName;
 
-    wsprintfW(buf, L"폰트: %s (%dpt)", g_app->logStyle.font.lfFaceName, GetFontPointSizeFromLogFont(g_app->logStyle.font));
+    wsprintfW(buf, L"폰트: %s (%dpt)", logFace, GetFontPointSizeFromLogFont(g_app->logStyle.font));
     SetWindowTextW(GetDlgItem(hwnd, ID_SET_PREVIEW_LOG_INFO), buf);
 
-    wsprintfW(buf, L"폰트: %s (%dpt)", g_app->inputStyle.font.lfFaceName, GetFontPointSizeFromLogFont(g_app->inputStyle.font));
+    wsprintfW(buf, L"폰트: %s (%dpt)", inpFace, GetFontPointSizeFromLogFont(g_app->inputStyle.font));
     SetWindowTextW(GetDlgItem(hwnd, ID_SET_PREVIEW_INP_INFO), buf);
 
 
@@ -552,7 +552,7 @@ void ShowSettingsDialog(HWND owner)
     static const wchar_t* kClass = L"TTGuiSettingsClass";
     static bool registered = false;
     if (!registered) {
-        WNDCLASSW wc = { 0 };
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = SettingsDialogProc;
         wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass;
@@ -795,8 +795,10 @@ static LRESULT CALLBACK ScreenSizePopupProc(HWND hwnd, UINT msg, WPARAM wParam, 
                 GetWindowTextW(GetDlgItem(hwnd, ID_SCREEN_SIZE_COLS), colsBuf, 64);
                 GetWindowTextW(GetDlgItem(hwnd, ID_SCREEN_SIZE_ROWS), rowsBuf, 64);
                 int cols = _wtoi(colsBuf); int rows = _wtoi(rowsBuf);
-                if (cols < 20) cols = 20; if (cols > 300) cols = 300;
-                if (rows < 5) rows = 5; if (rows > 200) rows = 200;
+                if (cols < 20) cols = 20;
+                if (cols > 300) cols = 300;
+                if (rows < 5) rows = 5;
+                if (rows > 200) rows = 200;
                 *state->cols = cols; *state->rows = rows;
                 state->accepted = true;
             }
@@ -915,7 +917,8 @@ void LoadWindowSettings(HWND hwnd)
     g_app->autoShowAddressBook = GetPrivateProfileIntW(L"startup", L"address_book", 0, path.c_str()) != 0;
     g_app->closeToTray = GetPrivateProfileIntW(L"window", L"close_to_tray", 0, path.c_str()) != 0;
 
-    if (w < 300) w = 300; if (h < 200) h = 200;
+    if (w < 300) w = 300;
+    if (h < 200) h = 200;
     if (x >= 0 && y >= 0 && x > -32000 && y > -32000) SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     else {
         RECT rcWork{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);

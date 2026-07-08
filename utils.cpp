@@ -22,7 +22,9 @@ static LRESULT CALLBACK CenterMsgBoxHookProc(int nCode, WPARAM wParam, LPARAM lP
 HHOOK g_hMsgBoxHook = nullptr;
 HWND g_hMsgBoxOwner = nullptr;
 
+#ifdef _MSC_VER
 #pragma comment(lib, "Version.lib")
+#endif
 
 // ==============================================
 // 1. 문자열 처리 유틸
@@ -218,6 +220,8 @@ std::wstring GetWindowTextString(HWND hwnd)
 // ==============================================
 HFONT GetPopupUIFont(HWND hwnd)
 {
+    (void)hwnd;
+
     static HFONT s_popupFont = nullptr;
     if (s_popupFont) return s_popupFont;
     LOGFONTW lf = {};
@@ -228,6 +232,8 @@ HFONT GetPopupUIFont(HWND hwnd)
 
 HFONT GetShortcutButtonUIFont(HWND hwnd)
 {
+    (void)hwnd;
+
     static HFONT s_shortcutFont = nullptr;
     if (s_shortcutFont) return s_shortcutFont;
     LOGFONTW lf = {};
@@ -276,7 +282,7 @@ int GetFontPointSizeFromLogFont(const LOGFONTW& lf)
 // utils.cpp 또는 해당 함수가 정의된 파일
 bool ChooseFontOnly(HWND hwnd, LOGFONTW& font)
 {
-    CHOOSEFONTW cf = { 0 };
+    CHOOSEFONTW cf = {};
     cf.lStructSize = sizeof(cf);
     cf.hwndOwner = hwnd;
     
@@ -501,7 +507,7 @@ void DrawOwnerDrawMenuItem(DRAWITEMSTRUCT* dis)
     SelectObject(dis->hDC, old);
 }
 
-static bool FindOwnerDrawMenuMeta(HMENU hMenu, ULONG_PTR itemData, bool* hasSubmenu)
+bool FindOwnerDrawMenuMeta(HMENU hMenu, ULONG_PTR itemData, bool* hasSubmenu)
 {
     if (!hMenu) return false;
     int count = GetMenuItemCount(hMenu);
@@ -805,6 +811,8 @@ void SaveLastConnectCommand(const std::wstring& text)
 
 void AddStyledText(HWND hRich, const wchar_t* text, int fontSize, bool bold, COLORREF color, int spaceBefore)
 {
+    (void)fontSize;
+
     // 원본 코드 그대로 유지
     NONCLIENTMETRICSW ncm = {};
     ncm.cbSize = sizeof(ncm);
@@ -1132,7 +1140,7 @@ void SendCommandToProcess(const std::wstring& line)
     }
 }
 
-static std::wstring ApplyAbbreviationToText(const std::wstring& input)
+std::wstring ApplyAbbreviationToText(const std::wstring& input)
 {
     std::wstring out;
     if (TryExpandAbbreviation(input, out))

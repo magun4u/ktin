@@ -15,8 +15,9 @@
 #include <shellapi.h>
 
 // 전역 변수
-static FindState g_findState = {};
 static HFONT g_hFontFindDialog = nullptr;
+
+static LRESULT CALLBACK ChatCaptureDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // ==============================================
 // 특수 기호 데이터
@@ -203,6 +204,8 @@ bool PerformLogFind(HWND hwndLog, bool reverseOverride, bool useReverseOverride)
 
 HFONT EnsureFindDialogFont(HWND hwndRef)
 {
+    (void)hwndRef;
+
     if (g_hFontFindDialog)
         return g_hFontFindDialog;
 
@@ -360,7 +363,7 @@ void ShowQuickConnectDialog(HWND owner)
     static const wchar_t* kClass = L"TTGuiQuickConnectClass";
     static bool registered = false;
     if (!registered) {
-        WNDCLASSW wc = { 0 };
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = QuickConnectProc;
         wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass;
@@ -406,7 +409,7 @@ void ShowChatCaptureDialog(HWND owner)
     static const wchar_t* kClass = L"TTGuiChatCaptureClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = ChatCaptureDialogProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = ChatCaptureDialogProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass; wc.hCursor = LoadCursor(0, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;
     }
@@ -891,7 +894,7 @@ void ShowSymbolDialog(HWND owner)
     static const wchar_t* kClass = L"TTGuiSymbolClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 };
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = SymbolDialogProc;
         wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass;
@@ -1243,11 +1246,10 @@ static LRESULT CALLBACK AutoSaveIntervalProc(HWND hwnd, UINT msg, WPARAM wParam,
 
 bool PromptMemoAutoSaveInterval(HWND owner, int& sec) {
     static bool reg = false;
-    if (!reg) { WNDCLASSW wc = { 0 }; wc.lpfnWndProc = AutoSaveIntervalProc; wc.lpszClassName = L"TTAUtoSaveInt"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
+    if (!reg) { WNDCLASSW wc = {}; wc.lpfnWndProc = AutoSaveIntervalProc; wc.lpszClassName = L"TTAUtoSaveInt"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true; }
     AutoSaveIntervalState st = { &sec, false };
     RECT rc; GetWindowRect(owner, &rc);
     HWND hDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"TTAUtoSaveInt", L"자동저장 설정", WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, rc.left + 50, rc.top + 50, 300, 130, owner, 0, 0, &st);
     EnableWindow(owner, FALSE); MSG msg; while (IsWindow(hDlg) && GetMessageW(&msg, 0, 0, 0)) { if (!IsDialogMessageW(hDlg, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }
     EnableWindow(owner, TRUE); SetActiveWindow(owner); return st.accepted;
 }
-

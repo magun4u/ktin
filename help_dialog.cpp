@@ -377,7 +377,7 @@ void ShowShortcutHelp(HWND owner)
     int h = 640;
 
     // 부모 창(메인 프로그램)의 위치와 크기 가져오기
-    RECT rcOwner = { 0 };
+    RECT rcOwner = {};
     if (owner && IsWindow(owner)) {
         GetWindowRect(owner, &rcOwner);
     }

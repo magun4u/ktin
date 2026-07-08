@@ -500,17 +500,17 @@ bool PromptAddressBookEntryEditor(HWND hwnd, AddressBookEntry& entry, bool isEdi
     SendMessageW(hChkAL, BM_SETCHECK, entry.autoLoginEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
     CreateWindowExW(0, L"STATIC", L"아이디 패턴:", WS_CHILD | WS_VISIBLE, 20, alY + 36, 85, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditIdPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alIdPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+    CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alIdPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         110, alY + 32, 155, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID_PAT, nullptr, nullptr);
     CreateWindowExW(0, L"STATIC", L"아이디:", WS_CHILD | WS_VISIBLE, 275, alY + 36, 55, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditId = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alId.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+    CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alId.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         330, alY + 32, 120, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_ID, nullptr, nullptr);
 
     CreateWindowExW(0, L"STATIC", L"비번 패턴:", WS_CHILD | WS_VISIBLE, 20, alY + 70, 85, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditPwPat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPwPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+    CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPwPattern.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         110, alY + 66, 155, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW_PAT, nullptr, nullptr);
     CreateWindowExW(0, L"STATIC", L"비번:", WS_CHILD | WS_VISIBLE, 275, alY + 70, 55, 20, hDlg, nullptr, nullptr, nullptr);
-    HWND hEditPw = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPw.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
+    CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", entry.alPw.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
         330, alY + 66, 120, 24, hDlg, (HMENU)(UINT_PTR)ID_ADDRESSBOOK_AL_PW, nullptr, nullptr);
 
     HWND hChkReconnect = CreateWindowExW(0, L"BUTTON", L"연결 실패/끊김 시 자동 재연결",
