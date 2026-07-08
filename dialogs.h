@@ -10,3 +10,4 @@ void ShowSymbolDialog(HWND owner);
 void ShowInfoPopup(HWND owner);
 
 bool PromptShortcutEditor(HWND hwnd);
+void CleanupDialogResources();

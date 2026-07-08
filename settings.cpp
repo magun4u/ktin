@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -8,6 +8,7 @@
 #include "memo.h"
 #include "resource.h"
 #include "chat_capture.h"
+#include "win_util.h"
 #include <commctrl.h>
 
 // 필요한 전방 선언 (다른 파일에 정의된 함수들)
@@ -18,6 +19,122 @@ extern int GetFontPointSizeFromLogFont(const LOGFONTW& lf);
 extern bool ChooseFontOnly(HWND owner, LOGFONTW& lf);
 extern bool ChooseColorOnly(HWND owner, COLORREF& color);
 extern bool ChooseBackgroundColor(HWND owner, COLORREF& color);
+
+struct PreviewBrush
+{
+    HBRUSH brush = nullptr;
+    COLORREF color = CLR_INVALID;
+};
+
+static PreviewBrush g_previewBrushes[6];
+
+static HBRUSH GetPreviewBrush(int slot, COLORREF color)
+{
+    if (slot < 0 || slot >= 6)
+        return GetSysColorBrush(COLOR_BTNFACE);
+    PreviewBrush& cache = g_previewBrushes[slot];
+    if (!cache.brush || cache.color != color)
+    {
+        ResetGdiObjectRef(cache.brush);
+        cache.brush = CreateSolidBrush(color);
+        cache.color = color;
+    }
+    return cache.brush ? cache.brush : GetSysColorBrush(COLOR_BTNFACE);
+}
+
+static void ClearPreviewBrushes()
+{
+    for (auto& cache : g_previewBrushes)
+    {
+        if (cache.brush)
+        {
+            ResetGdiObjectRef(cache.brush);
+        }
+        cache.color = CLR_INVALID;
+    }
+}
+
+static RECT GetNearestWorkAreaForRect(const RECT& rc)
+{
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+
+    HMONITOR mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
+    if (mon && GetMonitorInfoW(mon, &mi))
+        return mi.rcWork;
+
+    RECT work{};
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0))
+        return work;
+
+    work.left = 0;
+    work.top = 0;
+    work.right = GetSystemMetrics(SM_CXSCREEN);
+    work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    return work;
+}
+
+static void PlaceWindowOnVisibleWorkArea(HWND hwnd, int x, int y, int w, int h)
+{
+    if (!hwnd)
+        return;
+
+    if (w < 300) w = 300;
+    if (h < 200) h = 200;
+
+    RECT target{ x, y, x + w, y + h };
+    RECT work = GetNearestWorkAreaForRect(target);
+
+    const int workW = work.right - work.left;
+    const int workH = work.bottom - work.top;
+
+    if (workW > 0 && w > workW)
+        w = workW;
+    if (workH > 0 && h > workH)
+        h = workH;
+
+    if (x < work.left)
+        x = work.left;
+    if (y < work.top)
+        y = work.top;
+    if (x + w > work.right)
+        x = work.right - w;
+    if (y + h > work.bottom)
+        y = work.bottom - h;
+
+    if (x < work.left)
+        x = work.left;
+    if (y < work.top)
+        y = work.top;
+
+    SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void CenterWindowOnPrimaryWorkArea(HWND hwnd, int w, int h)
+{
+    RECT work{};
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0))
+    {
+        work.left = 0;
+        work.top = 0;
+        work.right = GetSystemMetrics(SM_CXSCREEN);
+        work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    if (w < 300) w = 300;
+    if (h < 200) h = 200;
+
+    const int workW = work.right - work.left;
+    const int workH = work.bottom - work.top;
+    if (workW > 0 && w > workW)
+        w = workW;
+    if (workH > 0 && h > workH)
+        h = workH;
+
+    const int x = work.left + (workW - w) / 2;
+    const int y = work.top + (workH - h) / 2;
+    SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
 
 // ==============================================
 // 1. 기본 경로 및 유틸 함수
@@ -81,7 +198,7 @@ void ApplyKeepAliveTimer(HWND hwnd)
     if (!g_app || !hwnd)
         return;
 
-    KillTimer(hwnd, ID_TIMER_KEEPALIVE);
+    KillWinTimer(hwnd, ID_TIMER_KEEPALIVE);
 
     if (!g_app->keepAliveEnabled)
         return;
@@ -90,7 +207,7 @@ void ApplyKeepAliveTimer(HWND hwnd)
     if (intervalMs < 5000)
         intervalMs = 5000;
 
-    SetTimer(hwnd, ID_TIMER_KEEPALIVE, intervalMs, nullptr);
+    StartWinTimer(hwnd, ID_TIMER_KEEPALIVE, intervalMs);
 }
 
 
@@ -323,12 +440,12 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         HWND hCtrl = (HWND)lParam;
         int id = GetDlgCtrlID(hCtrl);
 
-        if (id == ID_SET_PREVIEW_LOG_TEXT) { SetBkColor(hdc, g_app->logStyle.textColor); return (INT_PTR)CreateSolidBrush(g_app->logStyle.textColor); }
-        if (id == ID_SET_PREVIEW_LOG_BACK) { SetBkColor(hdc, g_app->logStyle.backColor); return (INT_PTR)CreateSolidBrush(g_app->logStyle.backColor); }
-        if (id == ID_SET_PREVIEW_INP_TEXT) { SetBkColor(hdc, g_app->inputStyle.textColor); return (INT_PTR)CreateSolidBrush(g_app->inputStyle.textColor); }
-        if (id == ID_SET_PREVIEW_INP_BACK) { SetBkColor(hdc, g_app->inputStyle.backColor); return (INT_PTR)CreateSolidBrush(g_app->inputStyle.backColor); }
-        if (id == ID_SET_PREVIEW_CHAT_TEXT) { SetBkColor(hdc, g_app->chatStyle.textColor); return (INT_PTR)CreateSolidBrush(g_app->chatStyle.textColor); }
-        if (id == ID_SET_PREVIEW_CHAT_BACK) { SetBkColor(hdc, g_app->chatStyle.backColor); return (INT_PTR)CreateSolidBrush(g_app->chatStyle.backColor); }
+        if (id == ID_SET_PREVIEW_LOG_TEXT) { SetBkColor(hdc, g_app->logStyle.textColor); return (INT_PTR)GetPreviewBrush(0, g_app->logStyle.textColor); }
+        if (id == ID_SET_PREVIEW_LOG_BACK) { SetBkColor(hdc, g_app->logStyle.backColor); return (INT_PTR)GetPreviewBrush(1, g_app->logStyle.backColor); }
+        if (id == ID_SET_PREVIEW_INP_TEXT) { SetBkColor(hdc, g_app->inputStyle.textColor); return (INT_PTR)GetPreviewBrush(2, g_app->inputStyle.textColor); }
+        if (id == ID_SET_PREVIEW_INP_BACK) { SetBkColor(hdc, g_app->inputStyle.backColor); return (INT_PTR)GetPreviewBrush(3, g_app->inputStyle.backColor); }
+        if (id == ID_SET_PREVIEW_CHAT_TEXT) { SetBkColor(hdc, g_app->chatStyle.textColor); return (INT_PTR)GetPreviewBrush(4, g_app->chatStyle.textColor); }
+        if (id == ID_SET_PREVIEW_CHAT_BACK) { SetBkColor(hdc, g_app->chatStyle.backColor); return (INT_PTR)GetPreviewBrush(5, g_app->chatStyle.backColor); }
 
         SetBkMode(hdc, TRANSPARENT);
         return (INT_PTR)GetSysColorBrush(COLOR_BTNFACE);
@@ -356,21 +473,19 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
             COLORREF bg = (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
             COLORREF fg = (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetSysColor(COLOR_WINDOWTEXT);
 
-            HBRUSH hbr = CreateSolidBrush(bg);
-            FillRect(dis->hDC, &dis->rcItem, hbr);
-            DeleteObject(hbr);
+            UniqueGdiObject hbr(CreateSolidBrush(bg));
+            if (hbr.IsValid())
+                FillRect(dis->hDC, &dis->rcItem, (HBRUSH)hbr.Get());
 
             SetBkMode(dis->hDC, TRANSPARENT);
             SetTextColor(dis->hDC, fg);
 
             HFONT hFont = GetPopupUIFont(hwnd);
-            HFONT hOld = (HFONT)SelectObject(dis->hDC, hFont);
+            ScopedSelectObject fontSel(dis->hDC, hFont);
 
             RECT rc = dis->rcItem;
             rc.left += 8;
             DrawTextW(dis->hDC, text, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-
-            SelectObject(dis->hDC, hOld);
 
             if (dis->itemState & ODS_FOCUS)
                 DrawFocusRect(dis->hDC, &dis->rcItem);
@@ -413,14 +528,13 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
         else if (id == ID_SET_BTN_INP_BG) {
             if (ChooseBackgroundColor(hwnd, g_app->inputStyle.backColor)) {
                 ApplyStyles();
-                if (g_app->hwndInput) { InvalidateRect(g_app->hwndInput, nullptr, TRUE); UpdateWindow(g_app->hwndInput); }
+                if (g_app->hwndInput) { InvalidateRect(g_app->hwndInput, nullptr, FALSE); }
             }
         }
         else if (id == ID_SET_CHK_AMBIGUOUS_WIDE && HIWORD(wParam) == BN_CLICKED) {
             g_app->ambiguousEastAsianWide = (SendMessageW(GetDlgItem(hwnd, ID_SET_CHK_AMBIGUOUS_WIDE), BM_GETCHECK, 0, 0) == BST_CHECKED);
             if (g_app->hwndLog) {
-                InvalidateRect(g_app->hwndLog, nullptr, TRUE);
-                UpdateWindow(g_app->hwndLog);   // 즉시 다시 그리기
+                InvalidateRect(g_app->hwndLog, nullptr, FALSE);
             }
         }
         else if (id == IDOK || id == ID_SET_BTN_APPLY) {
@@ -528,7 +642,7 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
                 PostMessageW(g_app->hwndMain, WM_SIZE, 0, 0); // 대신 WM_SIZE를 발생시켜 자연스럽게 재배치 유도
             }
             if (g_app->proc.hPC) ResizePseudoConsoleToLogWindow();
-            if (g_app && g_app->hwndLog) InvalidateRect(g_app->hwndLog, nullptr, TRUE);
+            if (g_app && g_app->hwndLog) InvalidateRect(g_app->hwndLog, nullptr, FALSE);
 
             if (id == IDOK) {
                 DestroyWindow(hwnd);
@@ -541,6 +655,7 @@ static LRESULT CALLBACK SettingsDialogProc(HWND hwnd, UINT msg, WPARAM wParam, L
     }
 
     case WM_DESTROY:
+        ClearPreviewBrushes();
         RemovePropW(hwnd, L"SettingsState");
         return 0;
     }
@@ -565,8 +680,8 @@ void ShowSettingsDialog(HWND owner)
     SettingsDlgState state;
     RECT rc; GetWindowRect(owner, &rc);
     int w = 600, h = 580;
-    int x = rc.left + (rc.right - rc.left - w) / 2;
-    int y = rc.top + (rc.bottom - rc.top - h) / 2;
+    int x = rc.left + (RectWidth(rc) - w) / 2;
+    int y = rc.top + (RectHeight(rc) - h) / 2;
 
     HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kClass, L"환경 설정",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -917,14 +1032,10 @@ void LoadWindowSettings(HWND hwnd)
     g_app->autoShowAddressBook = GetPrivateProfileIntW(L"startup", L"address_book", 0, path.c_str()) != 0;
     g_app->closeToTray = GetPrivateProfileIntW(L"window", L"close_to_tray", 0, path.c_str()) != 0;
 
-    if (w < 300) w = 300;
-    if (h < 200) h = 200;
-    if (x >= 0 && y >= 0 && x > -32000 && y > -32000) SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    else {
-        RECT rcWork{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
-        int screenW = rcWork.right - rcWork.left; int screenH = rcWork.bottom - rcWork.top;
-        SetWindowPos(hwnd, nullptr, rcWork.left + (screenW - w) / 2, rcWork.top + (screenH - h) / 2, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    if (x >= 0 && y >= 0 && x > -32000 && y > -32000)
+        PlaceWindowOnVisibleWorkArea(hwnd, x, y, w, h);
+    else
+        CenterWindowOnPrimaryWorkArea(hwnd, w, h);
 
     GetPrivateProfileStringW(L"recent", L"last_connect", L"", buf, 256, path.c_str());
     g_app->lastConnectCommand = buf;
@@ -968,8 +1079,8 @@ void SaveWindowSettings(HWND hwnd)
     wchar_t buf[64] = {};
     wsprintfW(buf, L"%ld", rc.left); WritePrivateProfileStringW(L"window", L"x", buf, path.c_str());
     wsprintfW(buf, L"%ld", rc.top); WritePrivateProfileStringW(L"window", L"y", buf, path.c_str());
-    wsprintfW(buf, L"%ld", rc.right - rc.left); WritePrivateProfileStringW(L"window", L"w", buf, path.c_str());
-    wsprintfW(buf, L"%ld", rc.bottom - rc.top); WritePrivateProfileStringW(L"window", L"h", buf, path.c_str());
+    wsprintfW(buf, L"%ld", RectWidth(rc)); WritePrivateProfileStringW(L"window", L"w", buf, path.c_str());
+    wsprintfW(buf, L"%ld", RectHeight(rc)); WritePrivateProfileStringW(L"window", L"h", buf, path.c_str());
 
     wsprintfW(buf, L"%d", (wp.showCmd == SW_MAXIMIZE) ? 1 : 0);
     WritePrivateProfileStringW(L"window", L"maximized", buf, path.c_str());
@@ -1026,8 +1137,7 @@ void SaveWindowSettings(HWND hwnd)
 void QueueSaveWindowSettings(HWND hwnd)
 {
     if (!hwnd) return;
-    KillTimer(hwnd, ID_TIMER_DEFER_SAVE);
-    SetTimer(hwnd, ID_TIMER_DEFER_SAVE, 250, nullptr);
+    RestartWinTimer(hwnd, ID_TIMER_DEFER_SAVE, 250);
 }
 
 void LoadQuickConnectHistory() {
@@ -1098,14 +1208,19 @@ void SaveInputHistorySettings()
     }
 
     int count = (int)g_app->history.size();
-    if (count > 1000) count = 1000;
+    int start = 0;
+    if (count > 1000)
+    {
+        start = count - 1000;
+        count = 1000;
+    }
 
     wchar_t buf[32]; wsprintfW(buf, L"%d", count);
     WritePrivateProfileStringW(L"input_history", L"count", buf, path.c_str());
 
     for (int i = 0; i < count; ++i) {
         wchar_t key[32]; wsprintfW(key, L"item_%d", i);
-        WritePrivateProfileStringW(L"input_history", key, g_app->history[i].c_str(), path.c_str());
+        WritePrivateProfileStringW(L"input_history", key, g_app->history[start + i].c_str(), path.c_str());
     }
 
     for (int i = count; i < 1000; ++i) {
@@ -1162,15 +1277,9 @@ BYTE GetCurrentFontQuality()
 
 void RebuildInputBrushes()
 {
-    if (!g_app) return;
-    if (g_app->hbrInputContainer) { DeleteObject(g_app->hbrInputContainer); g_app->hbrInputContainer = nullptr; }
-    if (g_app->hbrInputEdit) { DeleteObject(g_app->hbrInputEdit); g_app->hbrInputEdit = nullptr; }
-    if (g_app->hbrInputEditActive) { DeleteObject(g_app->hbrInputEditActive); g_app->hbrInputEditActive = nullptr; }
-
-    COLORREF base = g_app->inputStyle.backColor;
-    g_app->hbrInputContainer = CreateSolidBrush(base);
-    g_app->hbrInputEdit = CreateSolidBrush(base);
-    g_app->hbrInputEditActive = CreateSolidBrush(base);
+    if (!g_app)
+        return;
+    ResetInputBrushCache(g_app->inputStyle.backColor);
 }
 
 void SaveAutoLoginSettings() {
@@ -1261,7 +1370,6 @@ void UpdateMenuToggleStates()
 
     if (g_app->hwndMain) {
         InvalidateRect(g_app->hwndMain, nullptr, FALSE);
-        UpdateWindow(g_app->hwndMain);
     }
 }
 

@@ -1,6 +1,7 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
+#include "app_state.h"
 #include "utils.h"
 #include "terminal_buffer.h"
 #include "chat_capture.h"
@@ -11,8 +12,11 @@
 #include "resource.h"
 #include "auto_login.h"
 #include "settings.h"
+#include "win_util.h"
 #include <commctrl.h>
 #include <shellapi.h>
+#include <algorithm>
+#include <cwctype>
 
 // 전역 변수
 static HFONT g_hFontFindDialog = nullptr;
@@ -69,7 +73,7 @@ int GetLogVisibleLineCount(HWND hwndLog)
     if (lineHeight <= 0)
         lineHeight = 18;
 
-    int visible = (rc.bottom - rc.top) / lineHeight;
+    int visible = RectHeight(rc) / lineHeight;
     if (visible < 1)
         visible = 1;
     return visible;
@@ -86,113 +90,121 @@ bool IsLogAtBottom(HWND hwndLog)
 // ==============================================
 // 로그 찾기 핵심 엔진
 // ==============================================
+static size_t FirstSearchIndexAfterColumn(const std::vector<int>& cols, int col)
+{
+    return static_cast<size_t>(std::upper_bound(cols.begin(), cols.end(), col) - cols.begin());
+}
+
+static int LastSearchIndexBeforeColumn(const std::vector<int>& cols, int col)
+{
+    auto it = std::lower_bound(cols.begin(), cols.end(), col);
+    if (it == cols.begin())
+        return -1;
+    --it;
+    return static_cast<int>(it - cols.begin());
+}
+
+static void NormalizeSelectionForFind(const TerminalFindSnapshot& snap,
+                                      int& startX, int& startY,
+                                      int& endX, int& endY)
+{
+    startX = snap.selStartX;
+    startY = snap.selStartY;
+    endX = snap.selEndX;
+    endY = snap.selEndY;
+    if (startY > endY || (startY == endY && startX > endX))
+    {
+        std::swap(startX, endX);
+        std::swap(startY, endY);
+    }
+}
+
 bool PerformLogFind(HWND hwndLog, bool reverseOverride, bool useReverseOverride)
 {
     if (!g_app || !g_app->termBuffer || g_findState.query.empty())
         return false;
 
-    bool up = useReverseOverride ? reverseOverride : g_findState.directionUp;
+    const bool up = useReverseOverride ? reverseOverride : g_findState.directionUp;
 
-    // 검색어 준비 (대소문자 구분이 꺼져있으면 전부 소문자로 변환)
     std::wstring query = g_findState.query;
-    if (!g_findState.matchCase) {
-        std::transform(query.begin(), query.end(), query.begin(), ::towlower);
+    if (!g_findState.matchCase)
+        std::transform(query.begin(), query.end(), query.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+
+    TerminalFindSnapshot snap = g_app->termBuffer->MakeFindSnapshot();
+    const int totalLines = snap.historySize + snap.height;
+    if (snap.width <= 0 || totalLines <= 0 || query.empty())
+        return false;
+
+    int selStartX = 0, selStartY = 0, selEndX = 0, selEndY = 0;
+    if (snap.hasSelection)
+        NormalizeSelectionForFind(snap, selStartX, selStartY, selEndX, selEndY);
+
+    if (!up)
+    {
+        int startRow = 0;
+        int anchorCol = -1;
+        if (!g_findState.fromStart && snap.hasSelection)
+        {
+            startRow = ClampInt(selEndY, 0, totalLines - 1);
+            anchorCol = selEndX;
+        }
+
+        for (int y = startRow; y < totalLines; ++y)
+        {
+            TerminalRowTextSnapshot row = g_app->termBuffer->MakeRowTextSnapshot(y, !g_findState.matchCase);
+            if (!row.valid)
+                continue;
+
+            size_t startIdx = 0;
+            if (y == startRow && anchorCol >= 0)
+                startIdx = FirstSearchIndexAfterColumn(row.xByChar, anchorCol);
+            if (startIdx >= row.text.size())
+                continue;
+
+            size_t found = row.text.find(query, startIdx);
+            if (found == std::wstring::npos)
+                continue;
+
+            const size_t endIdx = std::min(found + query.length() - 1, row.xByChar.size() - 1);
+            g_app->termBuffer->SelectAndRevealRange(row.xByChar[found], y, row.xByChar[endIdx], y);
+            InvalidateRect(hwndLog, nullptr, FALSE);
+            return true;
+        }
     }
+    else
+    {
+        int startRow = totalLines - 1;
+        int anchorCol = snap.width;
+        if (!g_findState.fromStart && snap.hasSelection)
+        {
+            startRow = ClampInt(selStartY, 0, totalLines - 1);
+            anchorCol = selStartX;
+        }
 
-    std::lock_guard<std::recursive_mutex> lock(g_app->termBuffer->mtx);
+        for (int y = startRow; y >= 0; --y)
+        {
+            TerminalRowTextSnapshot row = g_app->termBuffer->MakeRowTextSnapshot(y, !g_findState.matchCase);
+            if (!row.valid || row.text.empty())
+                continue;
 
-    int totalLines = (int)g_app->termBuffer->history.size() + g_app->termBuffer->height;
-
-    // 터미널 버퍼 전체를 하나의 긴 문자열로 펼치고, 각 글자의 (X, Y) 좌표를 기억
-    std::wstring fullText;
-    struct CharMap { int x, y; };
-    std::vector<CharMap> cmap;
-
-    for (int y = 0; y < totalLines; ++y) {
-        for (int x = 0; x < g_app->termBuffer->width; ++x) {
-            TerminalCell c;
-            if (y < (int)g_app->termBuffer->history.size()) c = g_app->termBuffer->history[y][x];
-            else c = g_app->termBuffer->cells[(y - (int)g_app->termBuffer->history.size()) * g_app->termBuffer->width + x];
-
-            if (!c.isWideTrailer) {
-                wchar_t ch = c.ch;
-                if (!g_findState.matchCase) ch = std::towlower(ch);
-                fullText.push_back(ch);
-                cmap.push_back({ x, y });
+            size_t startIdx = row.text.size() - 1;
+            if (y == startRow)
+            {
+                int idx = LastSearchIndexBeforeColumn(row.xByChar, anchorCol);
+                if (idx < 0)
+                    continue;
+                startIdx = static_cast<size_t>(idx);
             }
+
+            size_t found = row.text.rfind(query, startIdx);
+            if (found == std::wstring::npos)
+                continue;
+
+            const size_t endIdx = std::min(found + query.length() - 1, row.xByChar.size() - 1);
+            g_app->termBuffer->SelectAndRevealRange(row.xByChar[found], y, row.xByChar[endIdx], y);
+            InvalidateRect(hwndLog, nullptr, FALSE);
+            return true;
         }
-        fullText.push_back(L'\n'); // 줄바꿈 구분자
-        cmap.push_back({ g_app->termBuffer->width - 1, y });
-    }
-
-    int startIdx = 0;
-
-    // "처음부터 찾기"가 아니고 현재 블럭 지정(선택)된 텍스트가 있다면, 그 위치부터 검색 시작!
-    if (!g_findState.fromStart && g_app->termBuffer->hasSelection) {
-        int targetX = up ? g_app->termBuffer->selStartX : g_app->termBuffer->selEndX;
-        int targetY = up ? g_app->termBuffer->selStartY : g_app->termBuffer->selEndY;
-
-        // 드래그 방향에 따라 정확한 시작/끝 좌표 보정
-        if (g_app->termBuffer->selStartY > g_app->termBuffer->selEndY ||
-            (g_app->termBuffer->selStartY == g_app->termBuffer->selEndY && g_app->termBuffer->selStartX > g_app->termBuffer->selEndX)) {
-            targetX = up ? g_app->termBuffer->selEndX : g_app->termBuffer->selStartX;
-            targetY = up ? g_app->termBuffer->selEndY : g_app->termBuffer->selStartY;
-        }
-
-        for (size_t i = 0; i < cmap.size(); ++i) {
-            if (cmap[i].y > targetY || (cmap[i].y == targetY && cmap[i].x >= targetX)) {
-                startIdx = (int)i;
-                break;
-            }
-        }
-        if (up) startIdx--;
-        else startIdx++;
-    }
-    else if (up) {
-        startIdx = (int)fullText.length() - 1;
-    }
-
-    size_t foundPos = std::wstring::npos;
-
-    // C++ 표준 문자열 검색(find) 활용
-    if (up) {
-        if (startIdx >= 0 && startIdx < (int)fullText.length()) {
-            foundPos = fullText.rfind(query, startIdx); // 위로 찾기 (역방향)
-        }
-    }
-    else {
-        if (startIdx >= 0 && startIdx < (int)fullText.length()) {
-            foundPos = fullText.find(query, startIdx); // 아래로 찾기 (정방향)
-        }
-    }
-
-    // ★ 검색어를 찾았다면!
-    if (foundPos != std::wstring::npos) {
-        int startX = cmap[foundPos].x;
-        int startY = cmap[foundPos].y;
-
-        size_t endIdx = foundPos + query.length() - 1;
-        if (endIdx >= cmap.size()) endIdx = cmap.size() - 1;
-
-        int endX = cmap[endIdx].x;
-        int endY = cmap[endIdx].y;
-
-        // 찾은 글자에 자동으로 은색 블럭(선택)을 씌움
-        g_app->termBuffer->SetSelectionStart(startX, startY);
-        g_app->termBuffer->SetSelectionEnd(endX, endY);
-
-        int viewTop = (int)g_app->termBuffer->history.size() - g_app->termBuffer->scrollOffset;
-        int viewBottom = viewTop + g_app->termBuffer->height - 1;
-
-        // 찾은 글자가 현재 화면 밖에 있다면(과거 로그라면), 그곳으로 자동 스크롤(점프)!
-        if (startY < viewTop || startY > viewBottom) {
-            g_app->termBuffer->scrollOffset = (int)g_app->termBuffer->history.size() - startY + (g_app->termBuffer->height / 2);
-            if (g_app->termBuffer->scrollOffset < 0) g_app->termBuffer->scrollOffset = 0;
-            if (g_app->termBuffer->scrollOffset > (int)g_app->termBuffer->history.size()) g_app->termBuffer->scrollOffset = (int)g_app->termBuffer->history.size();
-        }
-
-        InvalidateRect(hwndLog, nullptr, TRUE);
-        return true;
     }
 
     return false;
@@ -226,6 +238,11 @@ HFONT EnsureFindDialogFont(HWND hwndRef)
 
     g_hFontFindDialog = CreateFontIndirectW(&lf);
     return g_hFontFindDialog;
+}
+
+void CleanupDialogResources()
+{
+    ResetGdiObjectRef(g_hFontFindDialog);
 }
 
 static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
@@ -298,8 +315,8 @@ static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 g_app->quickConnectHistory.insert(g_app->quickConnectHistory.begin(), { addr, charset });
                 SaveQuickConnectHistory();
 
-                KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
-                KillTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT);
+                KillWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+                KillWinTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT);
 
                 // buildfix38: 빠른연결도 기존 세션을 먼저 종료합니다.
                 // 특히 빠른연결은 #session new 를 쓰기 때문에 기존 new 세션이 남아 있으면
@@ -324,7 +341,7 @@ static LRESULT CALLBACK QuickConnectProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     g_app->pendingQuickCharsetCommand = charsetCmd;
                     g_app->pendingQuickConnectCommand = sessionCmd;
                     g_app->hasPendingQuickConnect = true;
-                    SetTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT, 500, nullptr);
+                    RestartWinTimer(g_app->hwndMain, ID_TIMER_SWITCH_QUICK_CONNECT, 500);
                 }
                 else {
                     SendRawCommandToMud(charsetCmd);
@@ -392,8 +409,8 @@ void ShowQuickConnectDialog(HWND owner)
 
     RECT rc; GetWindowRect(owner, &rc);
     int w = 420, h = 160;
-    int x = rc.left + (rc.right - rc.left - w) / 2;
-    int y = rc.top + (rc.bottom - rc.top - h) / 2;
+    int x = rc.left + (RectWidth(rc) - w) / 2;
+    int y = rc.top + (RectHeight(rc) - h) / 2;
 
     HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kClass, L"빠른 연결",
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -781,9 +798,9 @@ static LRESULT CALLBACK SymbolDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         COLORREF bg = selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
         COLORREF fg = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetSysColor(COLOR_WINDOWTEXT);
 
-        HBRUSH hbr = CreateSolidBrush(bg);
-        FillRect(dis->hDC, &dis->rcItem, hbr);
-        DeleteObject(hbr);
+        UniqueGdiObject hbr(CreateSolidBrush(bg));
+        if (hbr.IsValid())
+            FillRect(dis->hDC, &dis->rcItem, (HBRUSH)hbr.Get());
 
         SetBkMode(dis->hDC, TRANSPARENT);
         SetTextColor(dis->hDC, fg);
@@ -1031,8 +1048,8 @@ static LRESULT CALLBACK InfoPopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     }
 
     case WM_DESTROY:
-        DeleteObject(hbrBack);
-        DeleteObject(hbrPanel);
+        ResetGdiObjectRef(hbrBack);
+        ResetGdiObjectRef(hbrPanel);
         return 0;
     }
 

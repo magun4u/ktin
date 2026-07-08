@@ -3,8 +3,8 @@
 #include "main.h"
 #include "utils.h"
 #include "terminal_buffer.h"
-#include "about_dialog.h"
 #include "settings.h"
+#include "win_util.h"
 #include <shellapi.h>      // ShellExecuteW
 #include <commctrl.h>      // SysLink 컨트롤
 
@@ -193,8 +193,8 @@ bool PromptAboutDialog(HWND hwnd)
     SetActiveWindow(hwnd);
     SetForegroundWindow(hwnd);
 
-    if (hFontTitle) DeleteObject(hFontTitle);
-    if (hFontSub) DeleteObject(hFontSub);
+    ResetGdiObjectRef(hFontTitle);
+    ResetGdiObjectRef(hFontSub);
 
     return true;
 }
@@ -277,17 +277,14 @@ LRESULT CALLBACK AboutPopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         COLORREF border = RGB(95, 100, 108);
         COLORREF text = RGB(235, 235, 235);
 
-        HBRUSH hbr = CreateSolidBrush(bg);
-        FillRect(hdc, &rc, hbr);
-        DeleteObject(hbr);
+        UniqueGdiObject hbr(CreateSolidBrush(bg));
+        if (hbr.IsValid())
+            FillRect(hdc, &rc, (HBRUSH)hbr.Get());
 
-        HPEN hPen = CreatePen(PS_SOLID, 1, border);
-        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        UniqueGdiObject hPen(CreatePen(PS_SOLID, 1, border));
+        ScopedSelectObject penSel(hdc, hPen.Get());
+        ScopedSelectObject brushSel(hdc, GetStockObject(NULL_BRUSH));
         Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
-        SelectObject(hdc, hOldBrush);
-        SelectObject(hdc, hOldPen);
-        DeleteObject(hPen);
 
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, text);
@@ -317,8 +314,8 @@ LRESULT CALLBACK AboutPopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_DESTROY:
-        if (hbrBack) { DeleteObject(hbrBack); hbrBack = nullptr; }
-        if (hbrPanel) { DeleteObject(hbrPanel); hbrPanel = nullptr; }
+        ResetGdiObjectRef(hbrBack);
+        ResetGdiObjectRef(hbrPanel);
         return 0;
     }
 

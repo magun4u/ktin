@@ -1,4 +1,4 @@
-﻿// utils.cpp
+// utils.cpp
 #include "constants.h"
 #include "types.h"
 #include "main.h"
@@ -7,14 +7,18 @@
 #include "theme.h"
 #include "settings.h"
 #include "resource.h"
+#include "app_version.h"
 #include "abbreviation.h"
 #include "timer.h"
 #include "memo.h"
 #include "auto_login.h"
+#include "win_util.h"
 #include <commdlg.h>
 #include <shellapi.h>
 #include <mmsystem.h>
 #include <shlwapi.h>
+#include <algorithm>
+#include <limits>
 static LRESULT CALLBACK CenterMsgBoxHookProc(int nCode, WPARAM wParam, LPARAM lParam);
 // ==============================================
 // 전역 변수
@@ -22,9 +26,78 @@ static LRESULT CALLBACK CenterMsgBoxHookProc(int nCode, WPARAM wParam, LPARAM lP
 HHOOK g_hMsgBoxHook = nullptr;
 HWND g_hMsgBoxOwner = nullptr;
 
+static HFONT g_popupUiFont = nullptr;
+static HFONT g_shortcutButtonFont = nullptr;
+
 #ifdef _MSC_VER
 #pragma comment(lib, "Version.lib")
 #endif
+
+// ==============================================
+// 파일 쓰기 유틸
+// ==============================================
+bool WriteAllToWinFile(HANDLE file, const void* data, size_t len)
+{
+    if (file == INVALID_HANDLE_VALUE || !file)
+        return false;
+    if (len == 0)
+        return true;
+    if (!data)
+        return false;
+
+    const char* ptr = static_cast<const char*>(data);
+    size_t left = len;
+    while (left > 0)
+    {
+        const DWORD block = static_cast<DWORD>(
+            std::min<size_t>(left, static_cast<size_t>(std::numeric_limits<DWORD>::max())));
+        DWORD written = 0;
+        if (!WriteFile(file, ptr, block, &written, nullptr) || written == 0)
+            return false;
+        ptr += written;
+        left -= written;
+    }
+    return true;
+}
+
+bool WriteBytesToFile(const std::wstring& path, const void* data, size_t len, bool append)
+{
+    const DWORD access = append ? FILE_APPEND_DATA : GENERIC_WRITE;
+    const DWORD creation = append ? OPEN_ALWAYS : CREATE_ALWAYS;
+    UniqueHandle file(CreateFileW(path.c_str(), access, FILE_SHARE_READ, nullptr,
+        creation, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.IsValid())
+        return false;
+
+    if (append)
+    {
+        LARGE_INTEGER zero{};
+        if (!SetFilePointerEx(file.Get(), zero, nullptr, FILE_END))
+            return false;
+    }
+
+    return WriteAllToWinFile(file.Get(), data, len);
+}
+
+bool WriteStringToFile(const std::wstring& path, const std::string& data, bool append)
+{
+    return WriteBytesToFile(path, data.data(), data.size(), append);
+}
+
+bool WriteUtf8BomTextFile(const std::wstring& path, const std::string& utf8)
+{
+    UniqueHandle file(CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.IsValid())
+        return false;
+
+    static const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
+    if (!WriteAllToWinFile(file.Get(), bom, sizeof(bom)))
+        return false;
+    if (!utf8.empty() && !WriteAllToWinFile(file.Get(), utf8.data(), utf8.size()))
+        return false;
+    return true;
+}
 
 // ==============================================
 // 1. 문자열 처리 유틸
@@ -134,19 +207,49 @@ std::wstring GetSettingsPath()
 // ==============================================
 // 4. 클립보드 / 파일 저장 / 사운드
 // ==============================================
+bool SetClipboardUnicodeText(HWND hwnd, const std::wstring& text)
+{
+    if (text.empty() || !OpenClipboard(hwnd))
+        return false;
+
+    bool ok = false;
+    HGLOBAL hglb = nullptr;
+
+    do
+    {
+        if (!EmptyClipboard())
+            break;
+
+        const size_t size = (text.size() + 1) * sizeof(wchar_t);
+        hglb = GlobalAlloc(GMEM_MOVEABLE, size);
+        if (!hglb)
+            break;
+
+        void* dst = GlobalLock(hglb);
+        if (!dst)
+            break;
+
+        memcpy(dst, text.c_str(), size);
+        GlobalUnlock(hglb);
+
+        if (!SetClipboardData(CF_UNICODETEXT, hglb))
+            break;
+
+        hglb = nullptr;
+        ok = true;
+    } while (false);
+
+    if (hglb)
+        GlobalFree(hglb);
+
+    CloseClipboard();
+    return ok;
+}
+
 void CopyToClipboard(HWND hwnd, const std::wstring& text)
 {
-    if (text.empty() || !OpenClipboard(hwnd)) return;
-    EmptyClipboard();
-    size_t size = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL hglb = GlobalAlloc(GMEM_MOVEABLE, size);
-    if (hglb) {
-        memcpy(GlobalLock(hglb), text.c_str(), size);
-        GlobalUnlock(hglb);
-        SetClipboardData(CF_UNICODETEXT, hglb);
-    }
-    CloseClipboard();
-    MessageBoxW(hwnd, L"클립보드에 복사되었습니다.", L"알림", MB_OK | MB_ICONINFORMATION);
+    if (SetClipboardUnicodeText(hwnd, text))
+        MessageBoxW(hwnd, L"클립보드에 복사되었습니다.", L"알림", MB_OK | MB_ICONINFORMATION);
 }
 
 void SaveTextToFile(HWND hwnd, const std::wstring& text)
@@ -166,16 +269,12 @@ void SaveTextToFile(HWND hwnd, const std::wstring& text)
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
     ofn.lpstrDefExt = L"txt";
     if (GetSaveFileNameW(&ofn)) {
-        HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD written;
-            unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-            WriteFile(hFile, bom, 3, &written, nullptr);
-            std::string utf8 = WideToUtf8(text);
-            WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
-            CloseHandle(hFile);
-            MessageBoxW(hwnd, L"파일이 성공적으로 저장되었습니다.", L"저장 완료", MB_OK | MB_ICONINFORMATION);
-        }
+        const bool ok = WriteUtf8BomTextFile(fileName, WideToUtf8(text));
+
+        MessageBoxW(hwnd,
+            ok ? L"파일이 성공적으로 저장되었습니다." : L"파일 저장 중 오류가 발생했습니다.",
+            ok ? L"저장 완료" : L"저장 실패",
+            MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
     }
 }
 
@@ -222,27 +321,35 @@ HFONT GetPopupUIFont(HWND hwnd)
 {
     (void)hwnd;
 
-    static HFONT s_popupFont = nullptr;
-    if (s_popupFont) return s_popupFont;
+    if (g_popupUiFont) return g_popupUiFont;
     LOGFONTW lf = {};
     GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
-    s_popupFont = CreateFontIndirectW(&lf);
-    return s_popupFont;
+    g_popupUiFont = CreateFontIndirectW(&lf);
+    return g_popupUiFont;
 }
 
 HFONT GetShortcutButtonUIFont(HWND hwnd)
 {
     (void)hwnd;
 
-    static HFONT s_shortcutFont = nullptr;
-    if (s_shortcutFont) return s_shortcutFont;
+    if (g_shortcutButtonFont) return g_shortcutButtonFont;
     LOGFONTW lf = {};
     NONCLIENTMETRICSW ncm = {};
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
     lf = ncm.lfMenuFont;
-    s_shortcutFont = CreateFontIndirectW(&lf);
-    return s_shortcutFont;
+    g_shortcutButtonFont = CreateFontIndirectW(&lf);
+    return g_shortcutButtonFont;
+}
+
+void CleanupCachedUiFonts()
+{
+    if (g_popupUiFont) {
+        ResetGdiObjectRef(g_popupUiFont);
+    }
+    if (g_shortcutButtonFont) {
+        ResetGdiObjectRef(g_shortcutButtonFont);
+    }
 }
 
 void ApplyPopupTitleBarTheme(HWND hwnd)
@@ -260,17 +367,15 @@ void ApplyPopupTitleBarTheme(HWND hwnd)
 
 LONG MakeLfHeightFromPointSize(HWND hwnd, int pt)
 {
-    HDC hdc = GetDC(hwnd);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(hwnd, hdc);
+    ScopedWindowDC dc(hwnd);
+    const int dpi = dc ? GetDeviceCaps(dc.Get(), LOGPIXELSY) : 96;
     return -MulDiv(pt, dpi, 72);
 }
 
 int GetFontPointSizeFromLogFont(const LOGFONTW& lf)
 {
-    HDC hdc = GetDC(nullptr);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(nullptr, hdc);
+    ScopedWindowDC dc(nullptr);
+    const int dpi = dc ? GetDeviceCaps(dc.Get(), LOGPIXELSY) : 96;
     int height = lf.lfHeight;
     if (height < 0) height = -height;
     return MulDiv(height, 72, dpi);
@@ -410,15 +515,16 @@ void MeasureOwnerDrawMenuItem(HWND hwnd, MEASUREITEMSTRUCT* mis)
     if (!mis || mis->CtlType != ODT_MENU) return;
     const wchar_t* text = reinterpret_cast<const wchar_t*>(mis->itemData);
     if (!text || !*text) { mis->itemWidth = 20; mis->itemHeight = 10; return; }
-    HDC hdc = GetDC(hwnd);
+    ScopedWindowDC dc(hwnd);
+    if (!dc) { mis->itemWidth = 60; mis->itemHeight = 26; return; }
+
+    HDC hdc = dc.Get();
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT old = (HFONT)SelectObject(hdc, hFont);
+    ScopedSelectObject fontSel(hdc, hFont);
     RECT rc = { 0, 0, 0, 0 };
     DrawTextW(hdc, text, -1, &rc, DT_SINGLELINE | DT_CALCRECT | DT_EXPANDTABS);
-    SelectObject(hdc, old);
-    ReleaseDC(hwnd, hdc);
-    mis->itemWidth = (UINT)(rc.right - rc.left) + 40;
-    mis->itemHeight = (UINT)(rc.bottom - rc.top) + 10;
+    mis->itemWidth = (UINT)RectWidth(rc) + 40;
+    mis->itemHeight = (UINT)RectHeight(rc) + 10;
     if (mis->itemHeight < 26) mis->itemHeight = 26;
 }
 
@@ -432,13 +538,13 @@ void DrawOwnerDrawMenuItem(DRAWITEMSTRUCT* dis)
     COLORREF bg = selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_BTNFACE);
     COLORREF fg = disabled ? GetSysColor(COLOR_GRAYTEXT)
         : (selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetSysColor(COLOR_MENUTEXT));
-    HBRUSH hbr = CreateSolidBrush(bg);
-    FillRect(dis->hDC, &dis->rcItem, hbr);
-    DeleteObject(hbr);
+    UniqueGdiObject hbr(CreateSolidBrush(bg));
+    if (hbr.IsValid())
+        FillRect(dis->hDC, &dis->rcItem, (HBRUSH)hbr.Get());
     SetBkMode(dis->hDC, TRANSPARENT);
     SetTextColor(dis->hDC, fg);
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT old = (HFONT)SelectObject(dis->hDC, hFont);
+    ScopedSelectObject fontSel(dis->hDC, hFont);
     RECT rcText = dis->rcItem;
     rcText.left += 12;
     rcText.right -= 16;
@@ -487,15 +593,11 @@ void DrawOwnerDrawMenuItem(DRAWITEMSTRUCT* dis)
         int cx = dis->rcItem.right - 12;
         int cy = (dis->rcItem.top + dis->rcItem.bottom) / 2;
         POINT pts[3] = { { cx - 4, cy - 4 }, { cx - 4, cy + 4 }, { cx + 1, cy } };
-        HBRUSH hArrowBrush = CreateSolidBrush(fg);
-        HPEN hArrowPen = CreatePen(PS_SOLID, 1, fg);
-        HGDIOBJ oldBrush = SelectObject(dis->hDC, hArrowBrush);
-        HGDIOBJ oldPen = SelectObject(dis->hDC, hArrowPen);
+        UniqueGdiObject hArrowBrush(CreateSolidBrush(fg));
+        UniqueGdiObject hArrowPen(CreatePen(PS_SOLID, 1, fg));
+        ScopedSelectObject brushSel(dis->hDC, hArrowBrush.Get());
+        ScopedSelectObject penSel(dis->hDC, hArrowPen.Get());
         Polygon(dis->hDC, pts, 3);
-        SelectObject(dis->hDC, oldBrush);
-        SelectObject(dis->hDC, oldPen);
-        DeleteObject(hArrowBrush);
-        DeleteObject(hArrowPen);
     }
     if (dis->itemState & ODS_FOCUS)
     {
@@ -504,7 +606,6 @@ void DrawOwnerDrawMenuItem(DRAWITEMSTRUCT* dis)
         rcFocus.right -= 2;
         DrawFocusRect(dis->hDC, &rcFocus);
     }
-    SelectObject(dis->hDC, old);
 }
 
 bool FindOwnerDrawMenuMeta(HMENU hMenu, ULONG_PTR itemData, bool* hasSubmenu)
@@ -538,10 +639,11 @@ void GetTerminalOffset(HWND hwnd, int& offsetX, int& offsetY)
     RECT rc;
     GetClientRect(hwnd, &rc);
 
-    const int clientW = (int)(rc.right - rc.left);
-    const int clientH = (int)(rc.bottom - rc.top);
-    const int gridW = g_app->termBuffer->width * cell.cx;
-    const int gridH = g_app->termBuffer->height * cell.cy;
+    TerminalBufferMetrics metrics = g_app->termBuffer->GetMetrics();
+    const int clientW = RectWidth(rc);
+    const int clientH = RectHeight(rc);
+    const int gridW = metrics.width * cell.cx;
+    const int gridH = metrics.height * cell.cy;
 
     int ml = max(0, g_app->termMarginLeft);
     int mr = max(0, g_app->termMarginRight);
@@ -575,6 +677,26 @@ void GetTerminalOffset(HWND hwnd, int& offsetX, int& offsetY)
     }
 }
 
+namespace
+{
+struct LogCellPixelSizeCache
+{
+    HWND hwnd = nullptr;
+    HFONT font = nullptr;
+    int dpiX = 0;
+    int dpiY = 0;
+    SIZE cell = { 8, 16 };
+    bool valid = false;
+};
+
+LogCellPixelSizeCache g_logCellPixelSizeCache;
+}
+
+void ResetLogCellPixelSizeCache()
+{
+    g_logCellPixelSizeCache = {};
+}
+
 SIZE GetLogCellPixelSize(HWND hwnd)
 {
     SIZE cell = { 8, 16 };
@@ -586,11 +708,24 @@ SIZE GetLogCellPixelSize(HWND hwnd)
     if (!target)
         return cell;
 
-    HDC hdc = GetDC(target);
-    if (!hdc)
+    ScopedWindowDC dc(target);
+    if (!dc)
         return cell;
 
-    HFONT hOldFont = (HFONT)SelectObject(hdc, g_app->hFontLog);
+    HDC hdc = dc.Get();
+    const int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+    const int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+
+    if (g_logCellPixelSizeCache.valid &&
+        g_logCellPixelSizeCache.hwnd == target &&
+        g_logCellPixelSizeCache.font == g_app->hFontLog &&
+        g_logCellPixelSizeCache.dpiX == dpiX &&
+        g_logCellPixelSizeCache.dpiY == dpiY)
+    {
+        return g_logCellPixelSizeCache.cell;
+    }
+
+    ScopedSelectObject fontSel(hdc, g_app->hFontLog);
 
     TEXTMETRICW tm = {};
     GetTextMetricsW(hdc, &tm);
@@ -632,8 +767,13 @@ SIZE GetLogCellPixelSize(HWND hwnd)
     cell.cx = cx;
     cell.cy = cy;
 
-    SelectObject(hdc, hOldFont);
-    ReleaseDC(target, hdc);
+    g_logCellPixelSizeCache.hwnd = target;
+    g_logCellPixelSizeCache.font = g_app->hFontLog;
+    g_logCellPixelSizeCache.dpiX = dpiX;
+    g_logCellPixelSizeCache.dpiY = dpiY;
+    g_logCellPixelSizeCache.cell = cell;
+    g_logCellPixelSizeCache.valid = true;
+
     return cell;
 }
 
@@ -704,10 +844,7 @@ static void ReturnTerminalViewToLive()
     if (!g_app || !g_app->termBuffer)
         return;
 
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_app->termBuffer->mtx);
-        g_app->termBuffer->scrollOffset = 0;
-    }
+    g_app->termBuffer->ScrollToLive();
 
     if (g_app->hwndLog && IsWindow(g_app->hwndLog))
         InvalidateRect(g_app->hwndLog, nullptr, FALSE);
@@ -783,7 +920,7 @@ void ResetKnownTinTinSession()
     g_app->activeTinTinSessionName.clear();
     g_app->hasActiveTinTinSession = false;
     g_app->isConnected = false;
-    g_app->isSessionActive = false;
+    SetSessionActiveState(g_app->hwndMain, false);
 }
 
 bool ZapKnownTinTinSession()
@@ -807,7 +944,7 @@ bool ZapKnownTinTinSession()
     g_app->hasActiveTinTinSession = false;
     g_app->hasActiveSession = false;
     g_app->isConnected = false;
-    g_app->isSessionActive = false;
+    SetSessionActiveState(g_app->hwndMain, false);
     g_app->autoLoginWindowActive = false;
 
     return true;
@@ -868,9 +1005,8 @@ void AddStyledText(HWND hRich, const wchar_t* text, int fontSize, bool bold, COL
     CHARFORMAT2W cf = {};
     cf.cbSize = sizeof(cf);
     cf.dwMask = CFM_SIZE | CFM_BOLD | CFM_COLOR | CFM_FACE;
-    HDC hdc = GetDC(nullptr);
-    int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(nullptr, hdc);
+    ScopedWindowDC dc(nullptr);
+    int dpiY = dc ? GetDeviceCaps(dc.Get(), LOGPIXELSY) : 96;
     cf.yHeight = MulDiv(abs(ncm.lfMenuFont.lfHeight), 72, dpiY) * 20;
     cf.dwEffects = bold ? CFE_BOLD : 0;
     cf.crTextColor = color;
@@ -992,16 +1128,6 @@ int GetSyntaxLanguageFromPath(const std::wstring& path)
     return 0;
 }
 
-void EnsureRichEditLoaded()
-{
-    if (!g_hRichEdit)
-    {
-        g_hRichEdit = LoadLibraryW(L"Msftedit.dll");
-        if (!g_hRichEdit)
-            g_hRichEdit = LoadLibraryW(L"Riched20.dll");
-    }
-}
-
 void SetupRichEditDefaults(HWND hwndRich)
 {
     if (!g_app) return;
@@ -1092,12 +1218,10 @@ void DrawCustomMenuBar(HDC hdc, HWND hwnd)
         curX += w + 4;
     }
     SelectObject(hdc, hOld);
-    HPEN hPen = CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW));
-    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    UniqueGdiObject hPen(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW)));
+    ScopedSelectObject penSel(hdc, hPen.Get());
     MoveToEx(hdc, 0, g_app->customMenuHeight - 1, nullptr);
     LineTo(hdc, rcClient.right, g_app->customMenuHeight - 1);
-    SelectObject(hdc, hOldPen);
-    DeleteObject(hPen);
 }
 
 bool IsRichEditNearBottom(HWND hwndRich)
@@ -1119,7 +1243,8 @@ void ShowTrayIcon(HWND hwnd) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_APP_TRAYICON;
     nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_ICON1));
-    lstrcpyW(nid.szTip, L"TinTin++ GUI (백그라운드 실행 중)");
+    std::wstring tip = L"TinTin++ GUI v" + GetAppVersionString() + L" (백그라운드 실행 중)";
+    lstrcpynW(nid.szTip, tip.c_str(), ARRAYSIZE(nid.szTip));
     Shell_NotifyIconW(NIM_ADD, &nid);
     g_app->trayIconVisible = true;
 }
@@ -1164,18 +1289,11 @@ void SendCommandToProcess(const std::wstring& line)
 
     std::string utf8 = WideToUtf8(sendText);
 
-    DWORD written = 0;
-    BOOL ok = WriteFile(
-        g_app->proc.stdinWrite,
-        utf8.data(),
-        static_cast<DWORD>(utf8.size()),
-        &written,
-        nullptr);
+    bool ok = WriteAllToWinFile(g_app->proc.stdinWrite, utf8.data(), utf8.size());
 
     wchar_t dbg[256];
-    wsprintfW(dbg, L"[SEND] ok=%d written=%lu size=%lu textlen=%zu\r\n",
+    wsprintfW(dbg, L"[SEND] ok=%d size=%lu textlen=%zu\r\n",
         ok ? 1 : 0,
-        (unsigned long)written,
         (unsigned long)utf8.size(),
         sendText.size());
     OutputDebugStringW(dbg);
@@ -1294,37 +1412,43 @@ void UnloadEmbeddedFont()
     }
 }
 
+#if KTIN_APP_VER_ALPHA_INDEX <= 0
+static std::wstring FormatKtinVersion(int major, int minor, int build)
+{
+    wchar_t verStr[64] = { 0 };
+    wsprintfW(verStr, L"%d.%d.%02d", major, minor, build);
+    return std::wstring(verStr);
+}
+#endif
+
+static std::wstring FormatTinTinVersion(int major, int minor, int patch, int build)
+{
+    wchar_t verStr[64] = { 0 };
+    wsprintfW(verStr, L"%d.%d.%d.%02d", major, minor, patch, build);
+    return std::wstring(verStr);
+}
+
 std::wstring GetAppVersionString()
 {
-    wchar_t exePath[MAX_PATH] = { 0 };
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+#if KTIN_APP_VER_ALPHA_INDEX > 0
+    wchar_t verStr[64] = { 0 };
+    wsprintfW(verStr, L"%d.%d-a%02d",
+        KTIN_APP_VER_MAJOR,
+        KTIN_APP_VER_MINOR,
+        KTIN_APP_VER_ALPHA_INDEX);
+    return std::wstring(verStr);
+#else
+    return FormatKtinVersion(KTIN_APP_VER_MAJOR, KTIN_APP_VER_MINOR, KTIN_APP_VER_BUILD);
+#endif
+}
 
-    DWORD dummy;
-    DWORD size = GetFileVersionInfoSizeW(exePath, &dummy);
-    if (size == 0) return L"1.0"; // 실패 시 기본값
-
-    std::vector<BYTE> buffer(size);
-    if (!GetFileVersionInfoW(exePath, 0, size, buffer.data())) return L"1.0";
-
-    VS_FIXEDFILEINFO* pFileInfo = nullptr;
-    UINT len = 0;
-
-    // 리소스에서 고정 파일 정보(버전 번호)를 뽑아옵니다.
-    if (VerQueryValueW(buffer.data(), L"\\", (LPVOID*)&pFileInfo, &len))
-    {
-        int major = HIWORD(pFileInfo->dwProductVersionMS);
-        int minor = LOWORD(pFileInfo->dwProductVersionMS);
-
-        // 만약 1.0.1 처럼 빌드 번호까지 쓰고 싶으시다면 아래 코드를 쓰시면 됩니다.
-        // int build = HIWORD(pFileInfo->dwProductVersionLS);
-        // wsprintfW(verStr, L"%d.%d.%d", major, minor, build);
-
-        wchar_t verStr[64];
-        wsprintfW(verStr, L"%d.%d", major, minor); // 결과: "2.0"
-        return std::wstring(verStr);
-    }
-
-    return L"1.0";
+std::wstring GetTinTinVersionString()
+{
+    return FormatTinTinVersion(
+        KTIN_TINTIN_VER_MAJOR,
+        KTIN_TINTIN_VER_MINOR,
+        KTIN_TINTIN_VER_PATCH,
+        KTIN_TINTIN_VER_BUILD);
 }
 
 std::wstring SimpleEncrypt(const std::wstring& plain)

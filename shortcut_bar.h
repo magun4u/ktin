@@ -38,6 +38,4 @@ void ApplyShortcutButtons(HWND hwnd);
 
 int GetShortcutBarHeight();
 
-#ifndef KTIN_MAIN_LOCAL_IMPL
 LRESULT CALLBACK ShortcutBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-#endif

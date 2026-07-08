@@ -1,10 +1,11 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
 #include "chat_capture.h"
 #include "log_tail.h"
 #include "theme.h"
+#include "win_util.h"
 
 #include <commctrl.h>
 #include <richedit.h>
@@ -23,11 +24,20 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <thread>
+#include <utility>
 
 static const wchar_t* kTailWndClass = L"KTinCaptureTailWindow";
 static const wchar_t* kTailPatternWndClass = L"KTinTailPatternWindow";
 static const wchar_t* kTailFilterWndClass = L"KTinTailFilterSettingsWindow";
 static const wchar_t* kTailTabSettingsWndClass = L"KTinTailTabSettingsWindow";
+static constexpr UINT WM_TAIL_READ_DONE = WM_APP + 101;
+static constexpr int kTailAppendLinesPerTick = 200;
+static constexpr int kTailMaxWindowsPerTimerTick = 2;
+static constexpr size_t kTailReadChunkBytes = 64 * 1024;
+static constexpr size_t kTailInitialReadBytes = 256 * 1024;
+
 
 struct TailFilterSettings
 {
@@ -58,6 +68,17 @@ static TailFilterSettings g_tailFilters;
 static bool g_tailFiltersLoaded = false;
 static void LoadTailFilterSettings();
 
+struct TailReadResult
+{
+    bool resetDisplay = false;
+    bool statusOnly = false;
+    bool firstRead = false;
+    bool startedFromMiddle = false;
+    std::wstring path;
+    std::wstring text;
+    LONGLONG newPos = 0;
+};
+
 struct TailState
 {
     HWND hwnd = nullptr;
@@ -78,17 +99,55 @@ struct TailState
     std::deque<std::wstring> lines;
     int maxLines = 2000;              // RichEdit에 유지할 표시 줄 수
     LONGLONG totalMatchedLines = 0;   // 상태바에 표시할 누적 매칭 줄 수
-    bool reading = false;             // tail 공통 타이머 중 재진입 방지
+    bool reading = false;             // tail worker 재진입 방지
     WNDPROC oldEditProc = nullptr;
+
+    std::mutex workerMtx;
+    std::thread worker;
+    bool workerRunning = false;
+    bool closeRequested = false;
+    std::deque<TailReadResult> pendingResults;
+    std::deque<std::wstring> pendingChunks;
+    TextStyle appendStyle{};
+    bool appendStyleValid = false;
 };
+
+struct TailEditRedrawGuard
+{
+    HWND hwnd = nullptr;
+    bool active = false;
+
+    explicit TailEditRedrawGuard(TailState* st)
+    {
+        if (st && st->hwndEdit && IsWindow(st->hwndEdit))
+        {
+            hwnd = st->hwndEdit;
+            SendMessageW(hwnd, WM_SETREDRAW, FALSE, 0);
+            active = true;
+        }
+    }
+
+    ~TailEditRedrawGuard()
+    {
+        if (active && hwnd && IsWindow(hwnd))
+        {
+            SendMessageW(hwnd, WM_SETREDRAW, TRUE, 0);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+    }
+};
+
 
 static std::vector<TailState*> g_tailWindows;
 static HWND g_tailTimerOwner = nullptr;
+static size_t g_tailTimerCursor = 0;
 static LOGFONTW g_lastAppliedTailFont{};
 static bool g_haveLastAppliedTailFont = false;
 
 static void TailApplyMainLogFontToEdit(HWND hwndEdit);
 static void TailLayout(TailState* st);
+static void TailDrainPendingResults(TailState* st, int maxLines);
+static void TailRetireCompletedWorker(TailState* st);
 static void TailSnapToNearbyWindows(TailState* st);
 static bool TailGetVisibleWindowRect(HWND hwnd, RECT& out);
 static void TailMoveWindowToVisibleRect(TailState* st, const RECT& desiredVisibleRect);
@@ -107,6 +166,111 @@ void CloseAllCaptureTailWindows()
     for (HWND hwnd : windows)
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
 }
+static void TailTransferTimerOwner(TailState* skip)
+{
+    if (g_tailTimerOwner && IsWindow(g_tailTimerOwner))
+        KillWinTimer(g_tailTimerOwner, ID_TIMER_TAIL_REFRESH);
+
+    g_tailTimerOwner = nullptr;
+    for (auto* next : g_tailWindows)
+    {
+        if (next == skip)
+            continue;
+        if (next && next->hwnd && IsWindow(next->hwnd))
+        {
+            g_tailTimerOwner = next->hwnd;
+            StartWinTimer(next->hwnd, ID_TIMER_TAIL_REFRESH, 1000);
+            break;
+        }
+    }
+}
+
+static bool TailWorkerBusy(TailState* st)
+{
+    if (!st)
+        return false;
+
+    std::lock_guard<std::mutex> lock(st->workerMtx);
+    return st->workerRunning || st->reading;
+}
+
+static void TailDiscardPendingUiWork(TailState* st)
+{
+    if (!st)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock(st->workerMtx);
+        st->pendingResults.clear();
+    }
+    st->pendingChunks.clear();
+    st->fragment.clear();
+}
+
+static bool TailBeginDeferredClose(TailState* st)
+{
+    if (!st)
+        return false;
+
+    if (!TailWorkerBusy(st))
+        return false;
+
+    st->closeRequested = true;
+    TailDiscardPendingUiWork(st);
+
+    if (st->hwnd && IsWindow(st->hwnd))
+    {
+        KillWinTimer(st->hwnd, ID_TIMER_TAIL_REFRESH);
+        ShowWindow(st->hwnd, SW_HIDE);
+        EnableWindow(st->hwnd, FALSE);
+    }
+
+    if (st->hwnd == g_tailTimerOwner)
+        TailTransferTimerOwner(st);
+    return true;
+}
+
+static void TailRetireState(TailState* st)
+{
+    if (!st)
+        return;
+
+    if (!st->worker.joinable())
+    {
+        delete st;
+        return;
+    }
+
+    std::thread worker = std::move(st->worker);
+    std::thread([st, worker = std::move(worker)]() mutable
+    {
+        if (worker.joinable())
+            worker.join();
+        delete st;
+    }).detach();
+}
+
+static void TailRetireCompletedWorker(TailState* st)
+{
+    if (!st || !st->worker.joinable())
+        return;
+
+    bool running = false;
+    {
+        std::lock_guard<std::mutex> lock(st->workerMtx);
+        running = st->workerRunning || st->reading;
+    }
+    if (running)
+        return;
+
+    std::thread worker = std::move(st->worker);
+    std::thread([worker = std::move(worker)]() mutable
+    {
+        if (worker.joinable())
+            worker.join();
+    }).detach();
+}
+
 
 void ApplyTailWindowFonts()
 {
@@ -135,17 +299,17 @@ void ApplyTailWindowFonts()
         {
             HFONT hStatusFont = GetPopupUIFont(st->hwndStatus);
             SendMessageW(st->hwndStatus, WM_SETFONT, (WPARAM)hStatusFont, TRUE);
-            InvalidateRect(st->hwndStatus, nullptr, TRUE);
+            InvalidateRect(st->hwndStatus, nullptr, FALSE);
         }
 
         if (st->hwndTab && IsWindow(st->hwndTab))
         {
             SendMessageW(st->hwndTab, WM_SETFONT, (WPARAM)g_app->hFontLog, TRUE);
-            InvalidateRect(st->hwndTab, nullptr, TRUE);
+            InvalidateRect(st->hwndTab, nullptr, FALSE);
         }
 
         TailLayout(st);
-        InvalidateRect(st->hwnd, nullptr, TRUE);
+        InvalidateRect(st->hwnd, nullptr, FALSE);
     }
 }
 
@@ -227,10 +391,10 @@ static bool EnsureCaptureLogStarted(HWND owner)
         SaveCaptureLogSettings();
     }
 
-    if (g_app->hCaptureLogFile == INVALID_HANDLE_VALUE)
+    if (!g_app->captureLogOpen)
         StartCaptureLog();
 
-    if (g_app->hCaptureLogFile == INVALID_HANDLE_VALUE || g_app->captureLogPath.empty())
+    if (!g_app->captureLogOpen || g_app->captureLogPath.empty())
     {
         MessageBoxW(owner, L"갈무리 로그 파일을 열 수 없습니다.", L"갈무리", MB_OK | MB_ICONERROR);
         return false;
@@ -241,43 +405,51 @@ static bool EnsureCaptureLogStarted(HWND owner)
 static bool FileSizeOf(const std::wstring& path, LONGLONG& size)
 {
     size = 0;
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    UniqueHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.IsValid())
         return false;
+
     LARGE_INTEGER li{};
-    BOOL ok = GetFileSizeEx(h, &li);
-    CloseHandle(h);
-    if (!ok)
+    if (!GetFileSizeEx(file.Get(), &li))
         return false;
+
     size = li.QuadPart;
     return true;
 }
 
 static std::wstring ReadFileRangeUtf8(const std::wstring& path, LONGLONG from, LONGLONG& to)
 {
+    if (from < 0)
+        from = 0;
     to = from;
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+
+    UniqueHandle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.IsValid())
         return L"";
 
     LARGE_INTEGER pos{};
     pos.QuadPart = from;
-    SetFilePointerEx(h, pos, nullptr, FILE_BEGIN);
+    if (!SetFilePointerEx(file.Get(), pos, nullptr, FILE_BEGIN))
+        return L"";
 
+    const size_t maxChunk = kTailReadChunkBytes;
     std::string bytes;
+    bytes.reserve(std::min<size_t>(64 * 1024, maxChunk));
     char buf[8192];
     DWORD read = 0;
-    while (ReadFile(h, buf, sizeof(buf), &read, nullptr) && read > 0)
+    while (bytes.size() < maxChunk &&
+        ReadFile(file.Get(), buf, sizeof(buf), &read, nullptr) && read > 0)
     {
-        bytes.append(buf, buf + read);
-        to += read;
-        if (bytes.size() > 1024 * 1024)
+        const size_t remain = maxChunk - bytes.size();
+        const size_t take = std::min<size_t>(remain, read);
+        bytes.append(buf, buf + take);
+        to += static_cast<LONGLONG>(take);
+        if (take < read)
             break;
     }
 
-    CloseHandle(h);
     if (bytes.empty())
         return L"";
     return Utf8ToWide(bytes);
@@ -348,13 +520,22 @@ static void SaveTailFilterSettings()
     WritePrivateProfileStringW(L"tail_filters", L"ansi_user3", g_tailFilters.ansiUser3 ? L"1" : L"0", ini.c_str());
 }
 
-static std::wstring TrimCopy(std::wstring s)
+static bool IsTailSpace(wchar_t ch)
 {
-    while (!s.empty() && (s.front() == L' ' || s.front() == L'\t' || s.front() == L'\r' || s.front() == L'\n'))
-        s.erase(s.begin());
-    while (!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r' || s.back() == L'\n'))
-        s.pop_back();
-    return s;
+    return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static std::wstring TrimCopy(const std::wstring& s)
+{
+    size_t first = 0;
+    while (first < s.size() && IsTailSpace(s[first]))
+        ++first;
+
+    size_t last = s.size();
+    while (last > first && IsTailSpace(s[last - 1]))
+        --last;
+
+    return s.substr(first, last - first);
 }
 
 static std::vector<std::wstring> SplitTailTerms(const std::wstring& src)
@@ -395,9 +576,25 @@ static bool TailSpecialOrContains(const std::wstring& s, const std::wstring& ter
     return s.find(term) != std::wstring::npos;
 }
 
+static const std::vector<std::wstring>& TailTermsFor(const std::wstring& termsText)
+{
+    static std::map<std::wstring, std::vector<std::wstring>> cache;
+    constexpr size_t kMaxTailTermCache = 64;
+
+    auto it = cache.find(termsText);
+    if (it != cache.end())
+        return it->second;
+
+    if (cache.size() >= kMaxTailTermCache)
+        cache.clear();
+
+    auto inserted = cache.emplace(termsText, SplitTailTerms(termsText));
+    return inserted.first->second;
+}
+
 static bool ContainsTailTerms(const std::wstring& s, const std::wstring& termsText)
 {
-    std::vector<std::wstring> terms = SplitTailTerms(termsText);
+    const std::vector<std::wstring>& terms = TailTermsFor(termsText);
     for (const auto& term : terms)
     {
         if (TailSpecialOrContains(s, term))
@@ -415,11 +612,12 @@ static std::wstring MakeTailLineTimestamp()
     return buf;
 }
 
-static std::wstring TrimLeftCopy(std::wstring s)
+static std::wstring TrimLeftCopy(const std::wstring& s)
 {
-    while (!s.empty() && (s.front() == L' ' || s.front() == L'\t'))
-        s.erase(s.begin());
-    return s;
+    size_t first = 0;
+    while (first < s.size() && (s[first] == L' ' || s[first] == L'\t'))
+        ++first;
+    return first == 0 ? s : s.substr(first);
 }
 
 
@@ -676,83 +874,170 @@ static void TailApplyMainLogFontToEdit(HWND hwndEdit)
         SendMessageW(hwndEdit, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
         SendMessageW(hwndEdit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
     }
-    InvalidateRect(hwndEdit, nullptr, TRUE);
+    InvalidateRect(hwndEdit, nullptr, FALSE);
 }
 
-static void TailAppendPlainText(TailState* st, const std::wstring& text, COLORREF fg = RGB(220,220,220), bool bold = false)
+struct TailDisplayLine
+{
+    std::wstring plain;
+    std::wstring raw;
+    bool useAnsi = false;
+    bool addTimestamp = false;
+};
+
+static void TailEnsureAppendFormat(TailState* st, COLORREF fg, COLORREF bg, bool bold)
+{
+    if (!st || !st->hwndEdit)
+        return;
+
+    TextStyle next{ fg, bg, bold };
+    if (st->appendStyleValid && st->appendStyle == next)
+        return;
+
+    TailSetCharFormat(st->hwndEdit, fg, bg, bold);
+    st->appendStyle = next;
+    st->appendStyleValid = true;
+}
+
+static void TailAppendTextAtCursor(TailState* st, const std::wstring& text, COLORREF fg = RGB(220,220,220), bool bold = false)
 {
     if (!st || !st->hwndEdit || text.empty())
         return;
-    int len = GetWindowTextLengthW(st->hwndEdit);
-    SendMessageW(st->hwndEdit, EM_SETSEL, len, len);
-    TailSetCharFormat(st->hwndEdit, fg, RGB(0,0,0), bold);
+    TailEnsureAppendFormat(st, fg, RGB(0,0,0), bold);
     SendMessageW(st->hwndEdit, EM_REPLACESEL, FALSE, (LPARAM)text.c_str());
 }
 
-static void TailAppendLineEx(TailState* st, const std::wstring& plainLine, const std::wstring& rawLine, bool useAnsi, bool addTimestamp)
+static void TailTrimRichEditOnce(TailState* st)
 {
     if (!st || !st->hwndEdit || !IsWindow(st->hwndEdit))
         return;
-    st->totalMatchedLines++;
-    st->lines.push_back(plainLine);
-    while ((int)st->lines.size() > st->maxLines)
-        st->lines.pop_front();
 
-    int len = GetWindowTextLengthW(st->hwndEdit);
+    const int lc = (int)SendMessageW(st->hwndEdit, EM_GETLINECOUNT, 0, 0);
+    if (lc <= st->maxLines + 200)
+        return;
+
+    const int trimLines = std::max(1, lc - st->maxLines);
+    const int charIndex = (int)SendMessageW(st->hwndEdit, EM_LINEINDEX, trimLines, 0);
+    if (charIndex <= 0)
+        return;
+
+    SendMessageW(st->hwndEdit, EM_SETSEL, 0, charIndex);
+    SendMessageW(st->hwndEdit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+    const int len = GetWindowTextLengthW(st->hwndEdit);
     SendMessageW(st->hwndEdit, EM_SETSEL, len, len);
-    if (len > 0)
-        TailAppendPlainText(st, L"\r\n");
+}
 
-    if (addTimestamp)
-        TailAppendPlainText(st, MakeTailLineTimestamp(), RGB(160, 160, 160), false);
+static void TailAppendLinesBatch(TailState* st, const std::vector<TailDisplayLine>& batch)
+{
+    if (!st || !st->hwndEdit || !IsWindow(st->hwndEdit) || batch.empty())
+        return;
 
-    if (useAnsi)
+    const int oldLen = GetWindowTextLengthW(st->hwndEdit);
+    SendMessageW(st->hwndEdit, EM_SETSEL, oldLen, oldLen);
+
+    bool plainFastPath = true;
+    for (const auto& item : batch)
     {
-        std::vector<StyledRun> runs = TailAnsiToRuns(rawLine);
-        for (const auto& run : runs)
+        if (item.useAnsi || item.addTimestamp)
         {
-            if (run.text.empty()) continue;
-            TailSetCharFormat(st->hwndEdit, run.style.fg, run.style.bg, run.style.bold);
-            SendMessageW(st->hwndEdit, EM_REPLACESEL, FALSE, (LPARAM)run.text.c_str());
+            plainFastPath = false;
+            break;
         }
+    }
+
+    if (plainFastPath)
+    {
+        std::wstring joined;
+        size_t reserveChars = (oldLen > 0) ? 2 : 0;
+        for (const auto& item : batch)
+            reserveChars += item.plain.size() + 2;
+        joined.reserve(reserveChars);
+
+        bool needNewline = (oldLen > 0);
+        for (const auto& item : batch)
+        {
+            st->totalMatchedLines++;
+            st->lines.push_back(item.plain);
+            while ((int)st->lines.size() > st->maxLines)
+                st->lines.pop_front();
+
+            if (needNewline)
+                joined += L"\r\n";
+            needNewline = true;
+            joined += item.plain;
+        }
+
+        TailAppendTextAtCursor(st, joined);
     }
     else
     {
-        TailAppendPlainText(st, plainLine);
-    }
-
-    len = GetWindowTextLengthW(st->hwndEdit);
-    SendMessageW(st->hwndEdit, EM_SETSEL, len, len);
-
-    int lc = (int)SendMessageW(st->hwndEdit, EM_GETLINECOUNT, 0, 0);
-    if (lc > st->maxLines + 200)
-    {
-        int charIndex = (int)SendMessageW(st->hwndEdit, EM_LINEINDEX, 500, 0);
-        if (charIndex > 0)
+        bool needNewline = (oldLen > 0);
+        for (const auto& item : batch)
         {
-            SendMessageW(st->hwndEdit, WM_SETREDRAW, FALSE, 0);
-            SendMessageW(st->hwndEdit, EM_SETSEL, 0, charIndex);
-            SendMessageW(st->hwndEdit, EM_REPLACESEL, FALSE, (LPARAM)L"");
-            SendMessageW(st->hwndEdit, WM_SETREDRAW, TRUE, 0);
-            InvalidateRect(st->hwndEdit, nullptr, TRUE);
+            st->totalMatchedLines++;
+            st->lines.push_back(item.plain);
+            while ((int)st->lines.size() > st->maxLines)
+                st->lines.pop_front();
+
+            if (needNewline)
+                TailAppendTextAtCursor(st, L"\r\n");
+            needNewline = true;
+
+            if (item.addTimestamp)
+                TailAppendTextAtCursor(st, MakeTailLineTimestamp(), RGB(160, 160, 160), false);
+
+            if (item.useAnsi)
+            {
+                std::vector<StyledRun> runs = TailAnsiToRuns(item.raw);
+                for (const auto& run : runs)
+                {
+                    if (run.text.empty())
+                        continue;
+                    TailEnsureAppendFormat(st, run.style.fg, run.style.bg, run.style.bold);
+                    SendMessageW(st->hwndEdit, EM_REPLACESEL, FALSE, (LPARAM)run.text.c_str());
+                }
+            }
+            else
+            {
+                TailAppendTextAtCursor(st, item.plain);
+            }
         }
     }
+
+    const int newLen = GetWindowTextLengthW(st->hwndEdit);
+    SendMessageW(st->hwndEdit, EM_SETSEL, newLen, newLen);
+    TailTrimRichEditOnce(st);
 }
 
-static void TailProcessText(TailState* st, const std::wstring& text)
+static int TailProcessTextLimited(TailState* st, const std::wstring& text, int maxAppendedLines)
 {
-    if (!st || text.empty())
-        return;
-    st->fragment += text;
-    while (true)
+    if (!st)
+        return 0;
+    if (!text.empty())
+        st->fragment += text;
+
+    constexpr size_t kMaxTailFragment = 256 * 1024;
+    if (st->fragment.size() > kMaxTailFragment)
+        st->fragment.erase(0, st->fragment.size() - kMaxTailFragment);
+
+    std::vector<TailDisplayLine> batch;
+    if (maxAppendedLines > 0)
+        batch.reserve(static_cast<size_t>(maxAppendedLines));
+
+    int appended = 0;
+    int scanned = 0;
+    size_t start = 0;
+    while (maxAppendedLines <= 0 || appended < maxAppendedLines)
     {
-        size_t p = st->fragment.find(L'\n');
+        size_t p = st->fragment.find(L'\n', start);
         if (p == std::wstring::npos)
             break;
-        std::wstring line = st->fragment.substr(0, p);
+
+        std::wstring line = st->fragment.substr(start, p - start);
         if (!line.empty() && line.back() == L'\r')
             line.pop_back();
-        st->fragment.erase(0, p + 1);
+        start = p + 1;
+        ++scanned;
 
         if (st->firstRead && !line.empty() && st->startedFromMiddle)
         {
@@ -766,33 +1051,124 @@ static void TailProcessText(TailState* st, const std::wstring& text)
         std::wstring plainLine = StripAnsiForTail(line);
         if (TailLineMatchesMode(st->activeMode, plainLine, st->customPattern))
         {
-            bool ansiView = TailAnsiEnabledForMode(st->activeMode);
-            TailAppendLineEx(st, plainLine, line, ansiView, st->activeMode != 0);
+            TailDisplayLine item;
+            item.useAnsi = TailAnsiEnabledForMode(st->activeMode);
+            item.addTimestamp = (st->activeMode != 0);
+            item.raw = item.useAnsi ? line : std::wstring();
+            item.plain = std::move(plainLine);
+            batch.push_back(std::move(item));
+            ++appended;
+        }
+
+        if (maxAppendedLines > 0 && scanned >= maxAppendedLines * 8 && appended == 0)
+            break;
+    }
+
+    if (!batch.empty())
+        TailAppendLinesBatch(st, batch);
+
+    if (start > 0)
+        st->fragment.erase(0, start);
+    return appended;
+}
+
+static void TailDrainPendingResults(TailState* st, int maxLines)
+{
+    if (!st)
+        return;
+
+    std::deque<TailReadResult> readyResults;
+    {
+        std::lock_guard<std::mutex> lock(st->workerMtx);
+        readyResults.swap(st->pendingResults);
+    }
+
+    while (!readyResults.empty())
+    {
+        TailReadResult res = std::move(readyResults.front());
+        readyResults.pop_front();
+
+        if (res.resetDisplay)
+        {
+            st->lastPos = 0;
+            st->fragment.clear();
+            st->lines.clear();
+            st->pendingChunks.clear();
+            st->totalMatchedLines = 0;
+            if (st->hwndEdit && IsWindow(st->hwndEdit))
+            {
+                SetWindowTextW(st->hwndEdit, L"");
+                st->appendStyleValid = false;
+            }
+        }
+
+        if (!res.path.empty())
+            st->logPath = res.path;
+        st->lastPos = res.newPos;
+        st->firstRead = res.firstRead;
+        st->startedFromMiddle = res.startedFromMiddle;
+        if (!res.text.empty())
+            st->pendingChunks.push_back(std::move(res.text));
+    }
+
+    int remaining = maxLines;
+    int totalAppended = 0;
+    const bool hasWork = (remaining > 0) &&
+        (!st->pendingChunks.empty() || st->fragment.find(L'\n') != std::wstring::npos);
+
+    if (hasWork)
+    {
+        TailEditRedrawGuard redraw(st);
+        if (st->fragment.find(L'\n') != std::wstring::npos)
+        {
+            int appended = TailProcessTextLimited(st, L"", remaining);
+            totalAppended += appended;
+            remaining -= std::max(1, appended);
+        }
+
+        while (remaining > 0 && !st->pendingChunks.empty())
+        {
+            std::wstring text = std::move(st->pendingChunks.front());
+            st->pendingChunks.pop_front();
+            int appended = TailProcessTextLimited(st, text, remaining);
+            totalAppended += appended;
+            if (appended >= remaining)
+                break;
+            remaining -= std::max(1, appended);
         }
     }
+
+    if (totalAppended > 0)
+        TailUpdateStatus(st);
 }
+
 
 static void TailReadNewData(TailState* st, bool initial)
 {
     if (!st || !g_app)
         return;
-    if (st->reading)
-        return;
-    st->reading = true;
-    struct TailReadGuard { TailState* s; ~TailReadGuard(){ if (s) s->reading = false; } } guard{ st };
-    FlushCaptureLogBuffer();
 
-    // 갈무리 파일은 갈무리를 새로 켜거나 재접속 과정에서 바뀔 수 있습니다.
-    // 갈무리 보기창은 열린 시점의 파일만 고정하지 말고 현재 KTin이 쓰는 파일을 따라갑니다.
+    TailDrainPendingResults(st, kTailAppendLinesPerTick);
+    if (!st->pendingChunks.empty() || st->fragment.find(L'\n') != std::wstring::npos)
+        return;
+
+    TailRetireCompletedWorker(st);
+    if (st->worker.joinable())
+        return;
+
     if (!g_app->captureLogPath.empty() && st->logPath != g_app->captureLogPath)
     {
         st->logPath = g_app->captureLogPath;
         st->lastPos = 0;
         st->fragment.clear();
         st->lines.clear();
+        st->pendingChunks.clear();
         st->totalMatchedLines = 0;
         if (st->hwndEdit && IsWindow(st->hwndEdit))
+        {
             SetWindowTextW(st->hwndEdit, L"");
+            st->appendStyleValid = false;
+        }
         st->firstRead = false;
         st->startedFromMiddle = false;
     }
@@ -802,37 +1178,66 @@ static void TailReadNewData(TailState* st, bool initial)
     if (st->logPath.empty())
         return;
 
-    LONGLONG size = 0;
-    if (!FileSizeOf(st->logPath, size))
-        return;
-    if (initial)
     {
-        const LONGLONG kInitialBytes = 1024 * 1024;
-        st->lastPos = (size > kInitialBytes) ? (size - kInitialBytes) : 0;
-        st->startedFromMiddle = (st->lastPos > 0);
-        st->firstRead = st->startedFromMiddle;
+        std::lock_guard<std::mutex> lock(st->workerMtx);
+        if (st->workerRunning || st->reading)
+            return;
+        st->workerRunning = true;
+        st->reading = true;
     }
-    else if (st->lastPos > size)
+
+    const HWND hwndNotify = st->hwnd;
+    const std::wstring path = st->logPath;
+    const LONGLONG from = st->lastPos;
+
+    st->worker = std::thread([st, hwndNotify, path, from, initial]()
     {
-        st->lastPos = 0;
-        st->fragment.clear();
-        st->lines.clear();
-        st->totalMatchedLines = 0;
-        if (st->hwndEdit && IsWindow(st->hwndEdit))
-            SetWindowTextW(st->hwndEdit, L"");
-        st->firstRead = false;
-        st->startedFromMiddle = false;
-    }
-    if (st->lastPos >= size)
-    {
-        TailUpdateStatus(st);
-        return;
-    }
-    LONGLONG newPos = st->lastPos;
-    std::wstring text = ReadFileRangeUtf8(st->logPath, st->lastPos, newPos);
-    st->lastPos = newPos;
-    TailProcessText(st, text);
-    TailUpdateStatus(st);
+        TailReadResult result;
+        result.path = path;
+        result.newPos = from;
+
+        LONGLONG size = 0;
+        if (FileSizeOf(path, size))
+        {
+            LONGLONG readFrom = from;
+            if (initial)
+            {
+                readFrom = (size > static_cast<LONGLONG>(kTailInitialReadBytes))
+                    ? (size - static_cast<LONGLONG>(kTailInitialReadBytes)) : 0;
+                result.startedFromMiddle = (readFrom > 0);
+                result.firstRead = result.startedFromMiddle;
+            }
+            else if (readFrom > size)
+            {
+                readFrom = 0;
+                result.resetDisplay = true;
+                result.firstRead = false;
+                result.startedFromMiddle = false;
+            }
+
+            if (readFrom < size)
+            {
+                LONGLONG newPos = readFrom;
+                result.text = ReadFileRangeUtf8(path, readFrom, newPos);
+                result.newPos = newPos;
+            }
+            else
+            {
+                result.statusOnly = true;
+                result.newPos = readFrom;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(st->workerMtx);
+            st->pendingResults.push_back(std::move(result));
+            st->workerRunning = false;
+            st->reading = false;
+        }
+
+        if (hwndNotify && IsWindow(hwndNotify))
+            PostMessageW(hwndNotify, WM_TAIL_READ_DONE, 0, 0);
+    });
 }
 
 static void TailLayout(TailState* st);
@@ -844,7 +1249,10 @@ static void TailReloadActiveMode(TailState* st)
 {
     if (!st) return;
     if (st->hwndEdit && IsWindow(st->hwndEdit))
+    {
         SetWindowTextW(st->hwndEdit, L"");
+        st->appendStyleValid = false;
+    }
     st->lines.clear();
     st->totalMatchedLines = 0;
     st->lastPos = 0;
@@ -889,29 +1297,32 @@ static void TailSetActiveMode(TailState* st, int mode)
 
 static HMENU CreateTailWindowMenu(TailState* st, bool hidden, bool statusHidden)
 {
-    HMENU bar = CreateMenu();
-    HMENU view = CreatePopupMenu();
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_TAB_SETTINGS, L"탭 설정...");
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_HIDE_MENU, hidden ? L"메뉴 보이기" : L"메뉴 숨기기");
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_TOGGLE_STATUS, statusHidden ? L"상태바 보기" : L"상태바 숨기기");
-    AppendMenuW(view, MF_STRING | ((st && st->alwaysOnTop) ? MF_CHECKED : MF_UNCHECKED), ID_TAIL_MENU_TOPMOST, L"항상 위");
-    AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_COPY, L"선택/전체 복사");
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_SELECT_ALL, L"모두 선택");
-    AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view, MF_STRING, ID_TAIL_MENU_CLOSE, L"닫기");
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"보기");
-    return bar;
+    UniqueMenu bar(CreateMenu());
+    UniqueMenu view(CreatePopupMenu());
+    if (!bar.IsValid() || !view.IsValid())
+        return nullptr;
+
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_TAB_SETTINGS, L"탭 설정...");
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_HIDE_MENU, hidden ? L"메뉴 보이기" : L"메뉴 숨기기");
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_TOGGLE_STATUS, statusHidden ? L"상태바 보기" : L"상태바 숨기기");
+    AppendMenuW(view.Get(), MF_STRING | ((st && st->alwaysOnTop) ? MF_CHECKED : MF_UNCHECKED), ID_TAIL_MENU_TOPMOST, L"항상 위");
+    AppendMenuW(view.Get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_COPY, L"선택/전체 복사");
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_SELECT_ALL, L"모두 선택");
+    AppendMenuW(view.Get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view.Get(), MF_STRING, ID_TAIL_MENU_CLOSE, L"닫기");
+    if (!AppendMenuW(bar.Get(), MF_POPUP, (UINT_PTR)view.Get(), L"보기"))
+        return nullptr;
+
+    view.Release();
+    return bar.Release();
 }
 
 static void TailApplyMenuVisibility(TailState* st)
 {
     if (!st || !st->hwnd) return;
-    if (st->menuHidden)
-        SetMenu(st->hwnd, nullptr);
-    else
-        SetMenu(st->hwnd, CreateTailWindowMenu(st, false, st->statusHidden));
-    DrawMenuBar(st->hwnd);
+    HMENU menu = st->menuHidden ? nullptr : CreateTailWindowMenu(st, false, st->statusHidden);
+    ReplaceWindowMenu(st->hwnd, menu);
 }
 
 static void TailLayout(TailState* st)
@@ -939,8 +1350,8 @@ static void TailLayout(TailState* st)
 
     if (st->hwndEdit)
     {
-        int editW = static_cast<int>(rc.right - rc.left);
-        int editH = static_cast<int>(rc.bottom - rc.top - statusH - tabH);
+        int editW = RectWidth(rc);
+        int editH = RectHeight(rc) - statusH - tabH;
         if (editH < 0) editH = 0;
         MoveWindow(st->hwndEdit, 0, tabH, editW, editH, TRUE);
     }
@@ -948,14 +1359,24 @@ static void TailLayout(TailState* st)
 
 static std::wstring TailGetEditSelectionOrAll(TailState* st)
 {
-    if (!st || !st->hwndEdit) return L"";
-    DWORD start = 0, end = 0;
+    if (!st || !st->hwndEdit)
+        return L"";
+
+    DWORD start = 0;
+    DWORD end = 0;
     SendMessageW(st->hwndEdit, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+
     int len = GetWindowTextLengthW(st->hwndEdit);
-    if (len <= 0) return L"";
-    std::wstring all(len, L'\0');
-    GetWindowTextW(st->hwndEdit, &all[0], len + 1);
-    if (end > start && end <= (DWORD)len)
+    if (len <= 0)
+        return L"";
+
+    std::wstring all(static_cast<size_t>(len) + 1, L'\0');
+    int copied = GetWindowTextW(st->hwndEdit, &all[0], len + 1);
+    if (copied < 0)
+        return L"";
+    all.resize(static_cast<size_t>(copied));
+
+    if (end > start && end <= static_cast<DWORD>(all.size()))
         return all.substr(start, end - start);
     return all;
 }
@@ -963,19 +1384,19 @@ static std::wstring TailGetEditSelectionOrAll(TailState* st)
 static void TailShowContextMenu(TailState* st, POINT ptScreen)
 {
     if (!st || !st->hwnd) return;
-    HMENU menu = CreatePopupMenu();
+    UniqueMenu menu(CreatePopupMenu());
+    if (!menu.IsValid()) return;
     if (st->menuHidden)
-        AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_SHOW_MENU, L"메뉴 보이기");
+        AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_SHOW_MENU, L"메뉴 보이기");
     else
-        AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_HIDE_MENU, L"메뉴 숨기기");
-    AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_TOGGLE_STATUS, st->statusHidden ? L"상태바 보기" : L"상태바 숨기기");
-    AppendMenuW(menu, MF_STRING | (st->alwaysOnTop ? MF_CHECKED : MF_UNCHECKED), ID_TAIL_MENU_TOPMOST, L"항상 위");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_TAB_SETTINGS, L"탭 설정...");
-    AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_COPY, L"선택/전체 복사");
-    AppendMenuW(menu, MF_STRING, ID_TAIL_MENU_SELECT_ALL, L"모두 선택");
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN, ptScreen.x, ptScreen.y, 0, st->hwnd, nullptr);
-    DestroyMenu(menu);
+        AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_HIDE_MENU, L"메뉴 숨기기");
+    AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_TOGGLE_STATUS, st->statusHidden ? L"상태바 보기" : L"상태바 숨기기");
+    AppendMenuW(menu.Get(), MF_STRING | (st->alwaysOnTop ? MF_CHECKED : MF_UNCHECKED), ID_TAIL_MENU_TOPMOST, L"항상 위");
+    AppendMenuW(menu.Get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_TAB_SETTINGS, L"탭 설정...");
+    AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_COPY, L"선택/전체 복사");
+    AppendMenuW(menu.Get(), MF_STRING, ID_TAIL_MENU_SELECT_ALL, L"모두 선택");
+    TrackPopupMenu(menu.Get(), TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN, ptScreen.x, ptScreen.y, 0, st->hwnd, nullptr);
 }
 
 static LRESULT CALLBACK TailEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1234,20 +1655,20 @@ static void TailAdjustRectToWorkArea(RECT& rc, bool snappedAbove, const RECT& ta
     if (!GetMonitorInfoW(mon, &mi))
         return;
 
-    int w = rc.right - rc.left;
+    int w = RectWidth(rc);
     const int minH = 120;
 
     if (snappedAbove && rc.top < mi.rcWork.top)
     {
         rc.top = mi.rcWork.top;
         rc.bottom = target.top;
-        if (rc.bottom - rc.top < minH)
+        if (RectHeight(rc) < minH)
             rc.bottom = min((int)mi.rcWork.bottom, (int)rc.top + minH);
     }
     else if (!snappedAbove && rc.bottom > mi.rcWork.bottom)
     {
         rc.bottom = mi.rcWork.bottom;
-        if (rc.bottom - rc.top < minH)
+        if (RectHeight(rc) < minH)
             rc.top = max((int)mi.rcWork.top, (int)rc.bottom - minH);
     }
 
@@ -1510,10 +1931,7 @@ static void TailHandleCommand(TailState* st, int id)
     case ID_TAIL_MENU_TOGGLE_STATUS:
         st->statusHidden = !st->statusHidden;
         if (!st->menuHidden)
-        {
-            SetMenu(st->hwnd, CreateTailWindowMenu(st, false, st->statusHidden));
-            DrawMenuBar(st->hwnd);
-        }
+            TailApplyMenuVisibility(st);
         TailLayout(st);
         return;
     case ID_TAIL_MENU_TOPMOST:
@@ -1521,10 +1939,7 @@ static void TailHandleCommand(TailState* st, int id)
         SetWindowPos(st->hwnd, st->alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST,
             0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         if (!st->menuHidden)
-        {
-            SetMenu(st->hwnd, CreateTailWindowMenu(st, false, st->statusHidden));
-            DrawMenuBar(st->hwnd);
-        }
+            TailApplyMenuVisibility(st);
         return;
     case ID_TAIL_MENU_COPY:
     {
@@ -1536,7 +1951,8 @@ static void TailHandleCommand(TailState* st, int id)
         if (st->hwndEdit) SendMessageW(st->hwndEdit, EM_SETSEL, 0, -1);
         return;
     case ID_TAIL_MENU_CLOSE:
-        DestroyWindow(st->hwnd);
+        if (st->hwnd)
+            PostMessageW(st->hwnd, WM_CLOSE, 0, 0);
         return;
     }
 }
@@ -1551,7 +1967,7 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         st = (TailState*)((CREATESTRUCTW*)lParam)->lpCreateParams;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)st);
         st->hwnd = hwnd;
-        SetMenu(hwnd, CreateTailWindowMenu(st, false, st->statusHidden));
+        ReplaceWindowMenu(hwnd, CreateTailWindowMenu(st, false, st->statusHidden));
         st->hwndTab = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
             0, 0, 100, 28, hwnd, (HMENU)(UINT_PTR)ID_TAIL_TABCTRL, GetModuleHandleW(nullptr), nullptr);
         EnsureRichEditLoaded();
@@ -1583,7 +1999,7 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         if (!g_tailTimerOwner || !IsWindow(g_tailTimerOwner))
         {
             g_tailTimerOwner = hwnd;
-            SetTimer(hwnd, ID_TIMER_TAIL_REFRESH, 1000, nullptr);
+            StartWinTimer(hwnd, ID_TIMER_TAIL_REFRESH, 1000);
         }
         return 0;
     }
@@ -1593,14 +2009,34 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_EXITSIZEMOVE:
         TailSnapToNearbyWindows(st);
         return 0;
+    case WM_TAIL_READ_DONE:
+        if (st && st->closeRequested)
+        {
+            TailDiscardPendingUiWork(st);
+            if (!TailWorkerBusy(st))
+                DestroyWindow(hwnd);
+            return 0;
+        }
+        TailDrainPendingResults(st, kTailAppendLinesPerTick);
+        return 0;
     case WM_TIMER:
         if (wParam == ID_TIMER_TAIL_REFRESH)
         {
-            // buildfix34: 모든 갈무리 보기창이 각자 타이머를 돌리지 않고,
-            // 대표 창 하나의 공통 tail 타이머가 열린 갈무리창을 순서대로 갱신합니다.
             std::vector<TailState*> snapshot = g_tailWindows;
-            for (auto* tw : snapshot)
-                TailReadNewData(tw, false);
+            if (snapshot.empty())
+                return 0;
+
+            if (g_tailTimerCursor >= snapshot.size())
+                g_tailTimerCursor = 0;
+
+            const size_t maxWindows = std::min<size_t>(kTailMaxWindowsPerTimerTick, snapshot.size());
+            for (size_t i = 0; i < maxWindows; ++i)
+            {
+                TailState* tw = snapshot[g_tailTimerCursor % snapshot.size()];
+                ++g_tailTimerCursor;
+                if (tw && tw->hwnd && IsWindow(tw->hwnd))
+                    TailReadNewData(tw, false);
+            }
             return 0;
         }
         break;
@@ -1633,12 +2069,14 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         break;
     case WM_CLOSE:
+        if (st && TailBeginDeferredClose(st))
+            return 0;
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
         if (st)
         {
-            KillTimer(hwnd, ID_TIMER_TAIL_REFRESH);
+            KillWinTimer(hwnd, ID_TIMER_TAIL_REFRESH);
             if (st->hwndEdit)
             {
                 RemovePropW(st->hwndEdit, L"TailState");
@@ -1647,10 +2085,13 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             bool wasTimerOwner = (hwnd == g_tailTimerOwner);
             if (wasTimerOwner)
             {
-                KillTimer(hwnd, ID_TIMER_TAIL_REFRESH);
+                KillWinTimer(hwnd, ID_TIMER_TAIL_REFRESH);
                 g_tailTimerOwner = nullptr;
             }
             g_tailWindows.erase(std::remove(g_tailWindows.begin(), g_tailWindows.end(), st), g_tailWindows.end());
+            if (g_tailTimerCursor > g_tailWindows.size())
+                g_tailTimerCursor = 0;
+            TailDiscardPendingUiWork(st);
             if (wasTimerOwner && !g_tailWindows.empty())
             {
                 for (auto* next : g_tailWindows)
@@ -1658,12 +2099,12 @@ static LRESULT CALLBACK TailWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     if (next && next->hwnd && IsWindow(next->hwnd))
                     {
                         g_tailTimerOwner = next->hwnd;
-                        SetTimer(next->hwnd, ID_TIMER_TAIL_REFRESH, 1000, nullptr);
+                        StartWinTimer(next->hwnd, ID_TIMER_TAIL_REFRESH, 1000);
                         break;
                     }
                 }
             }
-            delete st;
+            TailRetireState(st);
             if (g_app && g_app->hwndMain)
             {
                 CreateMainMenu(g_app->hwndMain);

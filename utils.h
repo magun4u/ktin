@@ -1,8 +1,10 @@
-﻿#pragma once
+#pragma once
 #include "constants.h"
 #include "types.h"
+#include <cstddef>
 
 std::wstring GetAppVersionString();
+std::wstring GetTinTinVersionString();
 
 extern HHOOK g_hMsgBoxHook;
 extern HWND g_hMsgBoxOwner;
@@ -20,8 +22,14 @@ std::wstring GetModuleDirectory();
 std::wstring MakeAbsolutePath(const std::wstring& baseDir, const std::wstring& relativePath);
 std::wstring GetSessionsPath();
 std::wstring GetSettingsPath();
+bool SetClipboardUnicodeText(HWND hwnd, const std::wstring& text);
 void CopyToClipboard(HWND hwnd, const std::wstring& text);
 void SaveTextToFile(HWND hwnd, const std::wstring& text);
+
+bool WriteAllToWinFile(HANDLE file, const void* data, size_t len);
+bool WriteBytesToFile(const std::wstring& path, const void* data, size_t len, bool append = false);
+bool WriteStringToFile(const std::wstring& path, const std::string& data, bool append = false);
+bool WriteUtf8BomTextFile(const std::wstring& path, const std::string& utf8);
 void PlayAudioFile(const std::wstring& path);
 std::wstring GetEditTextW(HWND hEdit);
 std::wstring GetWindowTextString(HWND hwnd);
@@ -29,6 +37,7 @@ int GetInputAreaHeight();
 int GetShortcutBarHeight();
 HFONT GetPopupUIFont(HWND hwnd);
 HFONT GetShortcutButtonUIFont(HWND hwnd);
+void CleanupCachedUiFonts();
 void ApplyPopupTitleBarTheme(HWND hwnd);
 LONG MakeLfHeightFromPointSize(HWND hwnd, int pt);
 int GetFontPointSizeFromLogFont(const LOGFONTW& lf);
@@ -47,6 +56,7 @@ void DrawOwnerDrawMenuItem(DRAWITEMSTRUCT* dis);
 bool FindOwnerDrawMenuMeta(HMENU hMenu, ULONG_PTR itemData, bool* hasSubmenu);
 void GetTerminalOffset(HWND hwnd, int& offsetX, int& offsetY);
 SIZE GetLogCellPixelSize(HWND hwnd);
+void ResetLogCellPixelSizeCache();
 bool FitWindowToScreenGrid(HWND hwnd, int cols, int rows, bool onlyIfTooSmall = false);
 void ScrollRichEditByLines(HWND hwndRich, int lineDelta);
 void JumpRichEditToTop(HWND hwndRich);
@@ -69,7 +79,6 @@ void SetupChatRichEditDefaults(HWND hwndRich);
 std::wstring ColorToString(COLORREF c);
 COLORREF StringToColor(const wchar_t* s, COLORREF def = 0);
 int GetSyntaxLanguageFromPath(const std::wstring& path);
-void EnsureRichEditLoaded();
 int GetCustomMenuItemWidth(int index);
 int HitTestCustomMenuBar(int x, int y);
 void DrawCustomMenuBar(HDC hdc, HWND hwnd);

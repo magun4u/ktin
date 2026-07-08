@@ -10,6 +10,7 @@
 #include "resource.h"
 #include "settings.h"
 #include "dialogs.h"
+#include "win_util.h"
 #include <richedit.h>
 #include <commctrl.h>
 #include <fstream>
@@ -78,8 +79,8 @@ static void SaveMemoWindowSettings()
     wchar_t buf[64];
     wsprintfW(buf, L"%ld", rc.left); WritePrivateProfileStringW(L"memo_window", L"x", buf, path.c_str());
     wsprintfW(buf, L"%ld", rc.top); WritePrivateProfileStringW(L"memo_window", L"y", buf, path.c_str());
-    wsprintfW(buf, L"%ld", rc.right - rc.left); WritePrivateProfileStringW(L"memo_window", L"w", buf, path.c_str());
-    wsprintfW(buf, L"%ld", rc.bottom - rc.top); WritePrivateProfileStringW(L"memo_window", L"h", buf, path.c_str());
+    wsprintfW(buf, L"%d", RectWidth(rc)); WritePrivateProfileStringW(L"memo_window", L"w", buf, path.c_str());
+    wsprintfW(buf, L"%d", RectHeight(rc)); WritePrivateProfileStringW(L"memo_window", L"h", buf, path.c_str());
 }
 
 // 메모장 좌표 불러오기 함수
@@ -335,120 +336,122 @@ static void UpdateMemoMenuState(HWND hwnd)
 
 static void CreateMemoMenus(HWND hwnd)
 {
-    HMENU hMenuBar = CreateMenu();
-    HMENU hFile = CreatePopupMenu();
-    HMENU hEdit = CreatePopupMenu();
-    HMENU hSearch = CreatePopupMenu(); // ★ 새로 추가된 [찾기] 전용 메뉴
-    HMENU hFormat = CreatePopupMenu();
-    HMENU hMode = CreatePopupMenu();
+    UniqueMenu hMenuBar(CreateMenu());
+    UniqueMenu hFile(CreatePopupMenu());
+    UniqueMenu hEdit(CreatePopupMenu());
+    UniqueMenu hSearch(CreatePopupMenu());
+    UniqueMenu hFormat(CreatePopupMenu());
+    UniqueMenu hMode(CreatePopupMenu());
+
+    if (!hMenuBar.IsValid() || !hFile.IsValid() || !hEdit.IsValid() ||
+        !hSearch.IsValid() || !hFormat.IsValid() || !hMode.IsValid())
+        return;
 
     auto AddODItem = [](HMENU hMenu, UINT_PTR id, const wchar_t* text) {
         AppendMenuW(hMenu, MF_OWNERDRAW | MF_STRING, id, text);
         };
-    auto AddODPopup = [](HMENU hMenu, HMENU hPopup, const wchar_t* text) {
-        AppendMenuW(hMenu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)hPopup, text);
+    auto AddODPopup = [](HMENU hMenu, UniqueMenu& hPopup, const wchar_t* text) {
+        if (AppendMenuW(hMenu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)hPopup.Get(), text))
+            hPopup.Release();
         };
 
-    // --- [파일] 메뉴 ---
-    AddODItem(hFile, ID_MEMO_FILE_OPEN, L"열기...\tCtrl+O");
-    AddODItem(hFile, ID_MEMO_FILE_SAVE, L"저장\tCtrl+S");
-    AddODItem(hFile, ID_MEMO_FILE_SAVEAS, L"다른 이름으로 저장...");
-    AppendMenuW(hFile, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hFile, ID_MEMO_EXIT_TO_TINTIN, L"TinTin으로 나가기(&G)\tAlt+G");
-    AddODItem(hFile, ID_MEMO_FILE_LOAD_AUTOSAVE, L"자동 저장 복구(불러오기)...");
-    AppendMenuW(hFile, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hFile, ID_MEMO_FILE_EXIT, L"닫기\tEsc");
+    AddODItem(hFile.Get(), ID_MEMO_FILE_OPEN, L"열기...\tCtrl+O");
+    AddODItem(hFile.Get(), ID_MEMO_FILE_SAVE, L"저장\tCtrl+S");
+    AddODItem(hFile.Get(), ID_MEMO_FILE_SAVEAS, L"다른 이름으로 저장...");
+    AppendMenuW(hFile.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFile.Get(), ID_MEMO_EXIT_TO_TINTIN, L"TinTin으로 나가기(&G)\tAlt+G");
+    AddODItem(hFile.Get(), ID_MEMO_FILE_LOAD_AUTOSAVE, L"자동 저장 복구(불러오기)...");
+    AppendMenuW(hFile.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFile.Get(), ID_MEMO_FILE_EXIT, L"닫기\tEsc");
 
-    // --- [편집] 메뉴 ---
-    AddODItem(hEdit, ID_MEMO_EDIT_UNDO, L"실행취소\tCtrl+Z");
-    AddODItem(hEdit, ID_MEMO_EDIT_REDO, L"다시실행\tCtrl+Y");
-    AppendMenuW(hEdit, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hEdit, ID_MEMO_EDIT_CUT, L"잘라내기\tCtrl+X");
-    AddODItem(hEdit, ID_MEMO_EDIT_COPY, L"복사\tCtrl+C");
-    AddODItem(hEdit, ID_MEMO_EDIT_PASTE, L"붙여넣기\tCtrl+V");
-    AddODItem(hEdit, ID_MEMO_EDIT_DELETE, L"삭제\tDel");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_UNDO, L"실행취소\tCtrl+Z");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_REDO, L"다시실행\tCtrl+Y");
+    AppendMenuW(hEdit.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_CUT, L"잘라내기\tCtrl+X");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_COPY, L"복사\tCtrl+C");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_PASTE, L"붙여넣기\tCtrl+V");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DELETE, L"삭제\tDel");
 
-    AppendMenuW(hEdit, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hEdit, ID_MEMO_EDIT_DOC_START, L"글월 처음\tCtrl+Home");
-    AddODItem(hEdit, ID_MEMO_EDIT_DOC_END, L"글월 마지막\tCtrl+End");
-    AddODItem(hEdit, ID_MEMO_EDIT_SCR_START, L"화면 처음\tCtrl+PgUp");
-    AddODItem(hEdit, ID_MEMO_EDIT_SCR_END, L"화면 마지막\tCtrl+PgDn");
+    AppendMenuW(hEdit.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DOC_START, L"글월 처음\tCtrl+Home");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DOC_END, L"글월 마지막\tCtrl+End");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_SCR_START, L"화면 처음\tCtrl+PgUp");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_SCR_END, L"화면 마지막\tCtrl+PgDn");
 
-    AppendMenuW(hEdit, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hEdit, ID_MEMO_EDIT_DEL_END, L"뒤쪽 지우기\tAlt+Y");
-    AddODItem(hEdit, ID_MEMO_EDIT_DEL_WORD_LEFT, L"앞 단어 지우기\tCtrl+Bksp");
-    AddODItem(hEdit, ID_MEMO_EDIT_DEL_WORD_RIGHT, L"뒷 단어 지우기\tCtrl+Del");
-    AddODItem(hEdit, ID_MEMO_EDIT_DEL_LINE, L"한줄 지우기\tCtrl+L");
+    AppendMenuW(hEdit.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DEL_END, L"뒤쪽 지우기\tAlt+Y");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DEL_WORD_LEFT, L"앞 단어 지우기\tCtrl+Bksp");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DEL_WORD_RIGHT, L"뒷 단어 지우기\tCtrl+Del");
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_DEL_LINE, L"한줄 지우기\tCtrl+L");
 
-    AppendMenuW(hEdit, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hEdit, ID_MEMO_EDIT_SELECTALL, L"모두 선택\tCtrl+A");
+    AppendMenuW(hEdit.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hEdit.Get(), ID_MEMO_EDIT_SELECTALL, L"모두 선택\tCtrl+A");
 
-    // --- ★ [찾기] 메뉴 (새로 분리됨) ---
-    AddODItem(hSearch, ID_MEMO_EDIT_FIND, L"찾기\tCtrl+F");
-    AddODItem(hSearch, ID_MEMO_EDIT_FIND_NEXT, L"다음 찾기\tF3");
-    AddODItem(hSearch, ID_MEMO_EDIT_FIND_PREV, L"이전 찾기\tShift+F3");
-    AddODItem(hSearch, ID_MEMO_EDIT_REPLACE, L"바꾸기\tCtrl+H");
-    AppendMenuW(hSearch, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hSearch, ID_MEMO_EDIT_GOTO, L"행 찾아가기\tCtrl+G");
+    AddODItem(hSearch.Get(), ID_MEMO_EDIT_FIND, L"찾기\tCtrl+F");
+    AddODItem(hSearch.Get(), ID_MEMO_EDIT_FIND_NEXT, L"다음 찾기\tF3");
+    AddODItem(hSearch.Get(), ID_MEMO_EDIT_FIND_PREV, L"이전 찾기\tShift+F3");
+    AddODItem(hSearch.Get(), ID_MEMO_EDIT_REPLACE, L"바꾸기\tCtrl+H");
+    AppendMenuW(hSearch.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hSearch.Get(), ID_MEMO_EDIT_GOTO, L"행 찾아가기\tCtrl+G");
 
-    // --- [서식] 메뉴 ---
-    AddODItem(hFormat, ID_MEMO_FORMAT_TEXT_COLOR, L"글자색/선색 변경...");
-    AddODItem(hFormat, ID_MEMO_FORMAT_BACK_COLOR, L"배경색 변경...");
-    AppendMenuW(hFormat, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hFormat, ID_MEMO_FORMAT_FONT, L"폰트 변경...");
-    AppendMenuW(hFormat, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hFormat, ID_MEMO_FORMAT_ENC_UTF8, L"인코딩: UTF-8로 변경");
-    AddODItem(hFormat, ID_MEMO_FORMAT_ENC_CP949, L"인코딩: CP949(한국어)로 변경");
-    AppendMenuW(hFormat, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hFormat, ID_MEMO_FORMAT_WRAP_WIDTH, L"자동 줄바꿈 열 너비 설정...");
-    AddODItem(hFormat, ID_MEMO_ALIGN_LEFT, L"선택영역 왼쪽 정렬");
-    AddODItem(hFormat, ID_MEMO_ALIGN_CENTER, L"선택영역 가운데 정렬");
-    AddODItem(hFormat, ID_MEMO_ALIGN_RIGHT, L"선택영역 오른쪽 정렬");
-    AppendMenuW(hFormat, MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_TEXT_COLOR, L"글자색/선색 변경...");
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_BACK_COLOR, L"배경색 변경...");
+    AppendMenuW(hFormat.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_FONT, L"폰트 변경...");
+    AppendMenuW(hFormat.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_ENC_UTF8, L"인코딩: UTF-8로 변경");
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_ENC_CP949, L"인코딩: CP949(한국어)로 변경");
+    AppendMenuW(hFormat.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_WRAP_WIDTH, L"자동 줄바꿈 열 너비 설정...");
+    AddODItem(hFormat.Get(), ID_MEMO_ALIGN_LEFT, L"선택영역 왼쪽 정렬");
+    AddODItem(hFormat.Get(), ID_MEMO_ALIGN_CENTER, L"선택영역 가운데 정렬");
+    AddODItem(hFormat.Get(), ID_MEMO_ALIGN_RIGHT, L"선택영역 오른쪽 정렬");
+    AppendMenuW(hFormat.Get(), MF_SEPARATOR, 0, nullptr);
 
-    // ★ 구문 테마 서브 메뉴 추가
-    HMENU hTheme = CreatePopupMenu();
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_CLASSIC, L"기본 라이트 (Default Light)");
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_DEFAULT_DARK, L"기본 다크 (Default Dark)");
-    AppendMenuW(hTheme, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_ULTRAEDIT, L"울트라에디터 (UltraEdit)");
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_VSCODE, L"비주얼 스튜디오 (VS Code)");
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_GITHUB_DARK, L"깃허브 다크 (GitHub Dark)");
-    AppendMenuW(hTheme, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_MONOKAI, L"모노카이 다크 (Monokai)");
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_DRACULA, L"드라큘라 다크 (Dracula)");
-    AppendMenuW(hTheme, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_SOLAR_LIGHT, L"솔라라이즈드 라이트 (Solarized Light)");
-    AddODItem(hTheme, ID_MEMO_SYNTAX_THEME_SOLAR_DARK, L"솔라라이즈드 다크 (Solarized Dark)");
-    AddODPopup(hFormat, hTheme, L"구문 테마 선택...");
+    UniqueMenu hTheme(CreatePopupMenu());
+    if (!hTheme.IsValid())
+        return;
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_CLASSIC, L"기본 라이트 (Default Light)");
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_DEFAULT_DARK, L"기본 다크 (Default Dark)");
+    AppendMenuW(hTheme.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_ULTRAEDIT, L"울트라에디터 (UltraEdit)");
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_VSCODE, L"비주얼 스튜디오 (VS Code)");
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_GITHUB_DARK, L"깃허브 다크 (GitHub Dark)");
+    AppendMenuW(hTheme.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_MONOKAI, L"모노카이 다크 (Monokai)");
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_DRACULA, L"드라큘라 다크 (Dracula)");
+    AppendMenuW(hTheme.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_SOLAR_LIGHT, L"솔라라이즈드 라이트 (Solarized Light)");
+    AddODItem(hTheme.Get(), ID_MEMO_SYNTAX_THEME_SOLAR_DARK, L"솔라라이즈드 다크 (Solarized Dark)");
+    AddODPopup(hFormat.Get(), hTheme, L"구문 테마 선택...");
 
-    AddODItem(hFormat, ID_MEMO_FORMAT_SYNTAX_TINTIN, L"TinTin++ 구문 강조 켜기/끄기");
+    AddODItem(hFormat.Get(), ID_MEMO_FORMAT_SYNTAX_TINTIN, L"TinTin++ 구문 강조 켜기/끄기");
 
-    HMENU hSyntaxLang = CreatePopupMenu();
-    AddODItem(hSyntaxLang, ID_MEMO_FORMAT_SYNTAX_LANG_TINTIN, L"TinTin 구문강조");
-    AddODItem(hSyntaxLang, ID_MEMO_FORMAT_SYNTAX_LANG_CPP, L"C, C++ 구문강조");
-    AddODItem(hSyntaxLang, ID_MEMO_FORMAT_SYNTAX_LANG_CSHARP, L"C# 구문강조");
-    AddODPopup(hFormat, hSyntaxLang, L"구문 강조 선택...");
-    AddODItem(hFormat, ID_MEMO_VIEW_FORMATMARKS, L"조판 부호 보기 켜기");
+    UniqueMenu hSyntaxLang(CreatePopupMenu());
+    if (!hSyntaxLang.IsValid())
+        return;
+    AddODItem(hSyntaxLang.Get(), ID_MEMO_FORMAT_SYNTAX_LANG_TINTIN, L"TinTin 구문강조");
+    AddODItem(hSyntaxLang.Get(), ID_MEMO_FORMAT_SYNTAX_LANG_CPP, L"C, C++ 구문강조");
+    AddODItem(hSyntaxLang.Get(), ID_MEMO_FORMAT_SYNTAX_LANG_CSHARP, L"C# 구문강조");
+    AddODPopup(hFormat.Get(), hSyntaxLang, L"구문 강조 선택...");
+    AddODItem(hFormat.Get(), ID_MEMO_VIEW_FORMATMARKS, L"조판 부호 보기 켜기");
 
-    // --- [모드] 메뉴 ---
-    AddODItem(hMode, ID_MEMO_DRAW_TOGGLE, L"그리기 모드 켜기\tAlt+D");
-    AddODItem(hMode, ID_MEMO_REPEAT_SYMBOL, L"마지막 기호 반복\tCtrl+R");
-    AddODItem(hMode, ID_MEMO_AUTOSAVE_TOGGLE, L"자동저장 켜기");
-    AddODItem(hMode, ID_MEMO_VIEW_LINENUMBER, L"행 번호 보이기/숨기기");
-    AddODItem(hMode, ID_MENU_VIEW_SYMBOLS, L"특수 기호(&S)\tF4");
+    AddODItem(hMode.Get(), ID_MEMO_DRAW_TOGGLE, L"그리기 모드 켜기\tAlt+D");
+    AddODItem(hMode.Get(), ID_MEMO_REPEAT_SYMBOL, L"마지막 기호 반복\tCtrl+R");
+    AddODItem(hMode.Get(), ID_MEMO_AUTOSAVE_TOGGLE, L"자동저장 켜기");
+    AddODItem(hMode.Get(), ID_MEMO_VIEW_LINENUMBER, L"행 번호 보이기/숨기기");
+    AddODItem(hMode.Get(), ID_MENU_VIEW_SYMBOLS, L"특수 기호(&S)\tF4");
 
-    // ==========================================================
-    // ★ 상단 메뉴바에 부착하는 순서 결정
-    // ==========================================================
-    AddODPopup(hMenuBar, hFile, L"파일");
-    AddODPopup(hMenuBar, hEdit, L"편집");
-    AddODPopup(hMenuBar, hSearch, L"찾기"); // ★ 편집 바로 오른쪽에 추가!
-    AddODPopup(hMenuBar, hFormat, L"서식");
-    AddODPopup(hMenuBar, hMode, L"특수");
+    AddODPopup(hMenuBar.Get(), hFile, L"파일");
+    AddODPopup(hMenuBar.Get(), hEdit, L"편집");
+    AddODPopup(hMenuBar.Get(), hSearch, L"찾기");
+    AddODPopup(hMenuBar.Get(), hFormat, L"서식");
+    AddODPopup(hMenuBar.Get(), hMode, L"특수");
 
-    SetMenu(hwnd, hMenuBar);
-    UpdateMemoMenuState(hwnd); // 텍스트 상태 즉시 반영
+    if (!ReplaceWindowMenu(hwnd, hMenuBar.Release()))
+        return;
+
+    UpdateMemoMenuState(hwnd);
     MemoRebuildRecentMenu(hwnd);
 }
 
@@ -475,13 +478,7 @@ static void MemoAutoSave()
     std::wstring text = GetWindowTextString(g_memo.hwndEdit);
     std::string utf8 = WideToUtf8(text);
 
-    std::ofstream ofs(autoSavePath.c_str(), std::ios::binary);
-    if (ofs) {
-        const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
-        ofs.write((const char*)bom, 3);
-        ofs.write(utf8.data(), (std::streamsize)utf8.size());
-        ofs.close();
-    }
+    WriteUtf8BomTextFile(autoSavePath, utf8);
 }
 
 static LRESULT CALLBACK AutoSaveListProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -533,25 +530,26 @@ static bool PromptMemoLoadAutoSave(HWND owner, std::wstring& outPath)
     std::wstring searchPath = saveDir + L"\\*.txt";
 
     std::vector<AutoSaveFile> files;
-    WIN32_FIND_DATAW fd;
-    HANDLE hFind = FindFirstFileW(searchPath.c_str(), &fd);
-    if (hFind != INVALID_HANDLE_VALUE) {
+    WIN32_FIND_DATAW fd = {};
+    UniqueFindHandle hFind(FindFirstFileW(searchPath.c_str(), &fd));
+    if (hFind.IsValid()) {
         do {
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
                 AutoSaveFile af;
                 af.path = saveDir + L"\\" + fd.cFileName;
                 af.ft = fd.ftLastWriteTime;
 
-                SYSTEMTIME st; FileTimeToSystemTime(&fd.ftLastWriteTime, &st);
-                SYSTEMTIME lt; SystemTimeToTzSpecificLocalTime(nullptr, &st, &lt);
+                SYSTEMTIME st = {};
+                SYSTEMTIME lt = {};
+                FileTimeToSystemTime(&fd.ftLastWriteTime, &st);
+                SystemTimeToTzSpecificLocalTime(nullptr, &st, &lt);
                 wchar_t buf[256];
                 // 파일명과 저장된 시간을 예쁘게 표시
                 wsprintfW(buf, L"[%04d-%02d-%02d %02d:%02d:%02d] %s", lt.wYear, lt.wMonth, lt.wDay, lt.wHour, lt.wMinute, lt.wSecond, fd.cFileName);
                 af.display = buf;
                 files.push_back(af);
             }
-        } while (FindNextFileW(hFind, &fd));
-        FindClose(hFind);
+        } while (FindNextFileW(hFind.Get(), &fd));
     }
 
     if (files.empty()) {
@@ -618,7 +616,7 @@ static int MemoCharCellWidth(wchar_t ch)
     if (ch == 0 || ch == L'\0')
         return 1;
 
-    int w = GetCharWidthW(ch, true);
+    int w = KTinCharWidth(ch, true);
 
     if (w < 1) w = 1;
     if (w > 2) w = 2;
@@ -998,15 +996,15 @@ static void ApplyMemoLineSpacing()
 {
     if (!g_memo.hwndEdit || !g_memo.hFont) return;
 
-    HDC hdc = GetDC(g_memo.hwndEdit);
-    HFONT oldFont = (HFONT)SelectObject(hdc, g_memo.hFont);
+    ScopedWindowDC dc(g_memo.hwndEdit);
+    if (!dc) return;
+
+    HDC hdc = dc.Get();
+    ScopedSelectObject fontSel(hdc, g_memo.hFont);
 
     TEXTMETRICW tm = {};
     GetTextMetricsW(hdc, &tm);
     int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
-
-    SelectObject(hdc, oldFont);
-    ReleaseDC(g_memo.hwndEdit, hdc);
 
     // 폰트의 순수 높이(픽셀)를 RichEdit가 사용하는 Twips(1/1440인치) 단위로 정확히 변환
     int exactTwips = MulDiv(tm.tmHeight, 1440, logPixelsY);
@@ -1038,16 +1036,17 @@ static void ApplyMemoWrapWidth()
     }
     else {
         // 지정된 글자 수(칸)만큼의 픽셀을 계산하여 해당 너비에 도달하면 무조건 줄바꿈
-        HDC hdc = GetDC(g_memo.hwndEdit);
-        HFONT oldFont = (HFONT)SelectObject(hdc, g_memo.hFont);
-        SIZE sz;
+        ScopedWindowDC dc(g_memo.hwndEdit);
+        if (!dc) return;
+
+        HDC hdc = dc.Get();
+        ScopedSelectObject fontSel(hdc, g_memo.hFont);
+        SIZE sz{};
         GetTextExtentPoint32W(hdc, L"W", 1, &sz);
-        SelectObject(hdc, oldFont);
 
         int px = (g_memo.wrapCols * sz.cx) + 8; // 여백 8px 추가
         int twips = MulDiv(px, 1440, GetDeviceCaps(hdc, LOGPIXELSX));
         SendMessageW(g_memo.hwndEdit, EM_SETTARGETDEVICE, (WPARAM)hdc, twips);
-        ReleaseDC(g_memo.hwndEdit, hdc);
     }
 }
 
@@ -1372,8 +1371,9 @@ static bool PromptMemoColumnWidth(HWND owner, int& cols)
 static LRESULT CALLBACK MemoLineNumProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 {
     if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        ScopedPaintDC paint(hwnd);
+        HDC hdc = paint.Get();
+        if (!hdc) return 0;
         
         // 1. 배경색 칠하기 (약간 연한 회색)
         RECT rc; GetClientRect(hwnd, &rc);
@@ -1406,7 +1406,6 @@ static LRESULT CALLBACK MemoLineNumProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         }
 
         SelectObject(hdc, hOld);
-        EndPaint(hwnd, &ps);
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -1418,9 +1417,8 @@ static void LoadMemoUserKeywords()
 
     // 파일이 없으면 생성만 해둠
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::wofstream create(path.c_str());
-        create << L"Member\nObserver";
-        create.close();
+        static const char defaults[] = "Member\r\nObserver\r\n";
+        WriteBytesToFile(path, defaults, sizeof(defaults) - 1);
     }
 
     WIN32_FILE_ATTRIBUTE_DATA fad = {};
@@ -1562,26 +1560,58 @@ static bool IsTintinCommandChar(wchar_t c)
     return (c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z') || c == L'_';
 }
 
-static bool IsCppKeyword(const std::wstring& w) 
+static bool MemoRangeEquals(const std::wstring& text, int start, int end, const wchar_t* word, bool ignoreCase = false)
 {
-    static const std::vector<std::wstring> kw = {
+    if (!word || start < 0 || end < start)
+        return false;
+
+    const int len = end - start;
+    int i = 0;
+    for (; i < len && word[i] != 0; ++i)
+    {
+        wchar_t a = text[(size_t)start + (size_t)i];
+        wchar_t b = word[i];
+        if (ignoreCase)
+        {
+            a = (wchar_t)towlower(a);
+            b = (wchar_t)towlower(b);
+        }
+        if (a != b)
+            return false;
+    }
+    return i == len && word[i] == 0;
+}
+
+static bool IsCppKeywordRange(const std::wstring& text, int start, int end)
+{
+    static const wchar_t* kw[] = {
         L"int", L"char", L"void", L"float", L"double", L"bool", L"long", L"short",
         L"if", L"else", L"for", L"while", L"do", L"switch", L"case", L"default",
         L"return", L"break", L"continue", L"class", L"struct", L"enum", L"union",
         L"public", L"private", L"protected", L"static", L"const", L"new", L"delete",
         L"namespace", L"using", L"true", L"false", L"nullptr", L"sizeof", L"auto"
     };
-    return std::find(kw.begin(), kw.end(), w) != kw.end();
+    for (const wchar_t* word : kw)
+    {
+        if (MemoRangeEquals(text, start, end, word))
+            return true;
+    }
+    return false;
 }
 
-static bool IsShellKeyword(const std::wstring& w) 
+static bool IsShellKeywordRange(const std::wstring& text, int start, int end)
 {
-    static const std::vector<std::wstring> kw = {
+    static const wchar_t* kw[] = {
         L"if", L"then", L"else", L"elif", L"fi", L"case", L"esac", L"for", L"while",
         L"until", L"do", L"done", L"in", L"echo", L"read", L"export", L"local",
         L"return", L"function", L"break", L"continue", L"exit"
     };
-    return std::find(kw.begin(), kw.end(), w) != kw.end();
+    for (const wchar_t* word : kw)
+    {
+        if (MemoRangeEquals(text, start, end, word))
+            return true;
+    }
+    return false;
 }
 
 static void SetMemoThemeBaseColors(int themeIdx) 
@@ -1785,7 +1815,7 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         ApplyMemoFontAndFormat();
 
         SetFocus(g_memo.hwndEdit);
-        SetTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE, 3000, nullptr);
+        StartWinTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE, 3000);
 
         UpdateMemoTitle();
         UpdateMemoStatus();
@@ -1903,12 +1933,15 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         {
             int firstVisible = (int)SendMessageW(g_memo.hwndEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
             RECT rc; GetClientRect(g_memo.hwndEdit, &rc);
-            HDC hdc = GetDC(g_memo.hwndEdit);
-            HFONT oldFont = (HFONT)SelectObject(hdc, g_memo.hFont);
-            TEXTMETRICW tm; GetTextMetricsW(hdc, &tm);
-            SelectObject(hdc, oldFont); ReleaseDC(g_memo.hwndEdit, hdc);
+            ScopedWindowDC dc(g_memo.hwndEdit);
+            if (!dc) return 0;
 
-            int visibleLines = (rc.bottom - rc.top) / tm.tmHeight;
+            HDC hdc = dc.Get();
+            HFONT oldFont = (HFONT)SelectObject(hdc, g_memo.hFont);
+            TEXTMETRICW tm{}; GetTextMetricsW(hdc, &tm);
+            if (oldFont) SelectObject(hdc, oldFont);
+
+            int visibleLines = tm.tmHeight > 0 ? RectHeight(rc) / tm.tmHeight : 1;
             int targetLine = firstVisible + visibleLines - 1;
             int maxLines = (int)SendMessageW(g_memo.hwndEdit, EM_GETLINECOUNT, 0, 0);
             if (targetLine >= maxLines) targetLine = maxLines - 1;
@@ -1979,7 +2012,7 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         {
             if (g_memo.autoSave) {
                 g_memo.autoSave = false; // 켜져 있으면 끕니다.
-                KillTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE);
+                KillWinTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE);
             }
             else {
                 int sec = g_memo.autoSaveIntervalSec;
@@ -1987,7 +2020,7 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 if (PromptMemoAutoSaveInterval(hwnd, sec)) {
                     g_memo.autoSaveIntervalSec = sec;
                     g_memo.autoSave = true;
-                    SetTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE, g_memo.autoSaveIntervalSec * 1000, nullptr);
+                    StartWinTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE, g_memo.autoSaveIntervalSec * 1000);
                 }
             }
             UpdateMemoMenuState(hwnd);
@@ -2285,12 +2318,12 @@ static LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
     case WM_DESTROY:
     {
-        KillTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE);
+        KillWinTimer(hwnd, ID_TIMER_MEMO_AUTOSAVE);
         SaveMemoWindowSettings();
         if (g_memo.hwndEdit) RemovePropW(g_memo.hwndEdit, L"MemoOldProc");
 
         HWND hParent = GetWindow(hwnd, GW_OWNER);
-        if (g_memo.hFont) { DeleteObject(g_memo.hFont); g_memo.hFont = nullptr; }
+        ResetGdiObjectRef(g_memo.hFont);
         g_memo = MemoState{}; // 상태 완전 초기화
         if (hParent) SetFocus(hParent);
 
@@ -2378,10 +2411,11 @@ static void DrawMemoFormatMarks(HWND hwnd)
     if (!g_memo.showFormatMarks)
         return;
 
-    HDC hdc = GetDC(hwnd);
-    if (!hdc)
+    ScopedWindowDC dc(hwnd);
+    if (!dc)
         return;
 
+    HDC hdc = dc.Get();
     HFONT oldFont = nullptr;
     if (g_memo.hFont)
         oldFont = (HFONT)SelectObject(hdc, g_memo.hFont);
@@ -2470,8 +2504,6 @@ static void DrawMemoFormatMarks(HWND hwnd)
 
     if (oldFont)
         SelectObject(hdc, oldFont);
-
-    ReleaseDC(hwnd, hdc);
 }
 
 
@@ -2744,20 +2776,18 @@ static bool MemoSaveFile(HWND hwnd, const std::wstring& path)
     (void)hwnd;
 
     std::wstring text = GetWindowTextString(g_memo.hwndEdit);
-    std::ofstream ofs(path.c_str(), std::ios::binary);
-    if (!ofs) return false;
+    bool saved = false;
 
     if (g_memo.encodingType == 0) { // UTF-8
-        const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
-        ofs.write((const char*)bom, 3);
-        std::string utf8 = WideToMultiByte(text, CP_UTF8);
-        ofs.write(utf8.data(), (std::streamsize)utf8.size());
+        saved = WriteUtf8BomTextFile(path, WideToMultiByte(text, CP_UTF8));
     }
     else { // CP949 (EUC-KR)
         std::string ansi = WideToMultiByte(text, 949);
-        ofs.write(ansi.data(), (std::streamsize)ansi.size());
+        saved = WriteStringToFile(path, ansi);
     }
-    ofs.close();
+
+    if (!saved)
+        return false;
 
     g_memo.currentPath = path;
     MarkMemoDirty(false);
@@ -2905,7 +2935,7 @@ static void ApplyMemoFontAndFormat()
     g_memo.font.lfCharSet = HANGEUL_CHARSET; // 한글 깨짐 방지
     g_memo.font.lfPitchAndFamily = FIXED_PITCH | FF_MODERN; // 고정폭 강제
 
-    if (g_memo.hFont) DeleteObject(g_memo.hFont);
+    ResetGdiObjectRef(g_memo.hFont);
     g_memo.hFont = CreateFontIndirectW(&g_memo.font);
 
     SendMessageW(g_memo.hwndEdit, WM_SETFONT, (WPARAM)g_memo.hFont, TRUE);
@@ -3082,11 +3112,8 @@ static void ApplyMemoSyntaxHighlight(HWND hwndEdit)
             int j = i + 1;
             while (j < len && IsTintinCommandChar(text[j])) j++;
             if (j > i + 1) {
-                std::wstring cmd = text.substr(i + 1, j - (i + 1));
-                std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::towlower);
-
                 // TinTin의 #nop 처리
-                if (lang == 1 && cmd == L"nop") {
+                if (lang == 1 && MemoRangeEquals(text, i + 1, j, L"nop", true)) {
                     int depth = 0;
                     while (j < len) {
                         if (text[j] == L'{') depth++;
@@ -3141,19 +3168,18 @@ static void ApplyMemoSyntaxHighlight(HWND hwndEdit)
         if (IsTintinCommandChar(ch)) {
             int start = i;
             while (i < len && (IsTintinCommandChar(text[i]) || iswdigit(text[i]))) i++;
-            std::wstring word = text.substr(start, i - start);
 
             if (lang == 1) {
-                std::transform(word.begin(), word.end(), word.begin(), ::towlower);
-                if (word == L"else" || word == L"elseif") {
+                if (MemoRangeEquals(text, start, i, L"else", true) ||
+                    MemoRangeEquals(text, start, i, L"elseif", true)) {
                     ApplyColorRange(start, i, clrCommand);
                 }
             }
             else if (lang == 2) {
-                if (IsCppKeyword(word)) ApplyColorRange(start, i, clrCommand);
+                if (IsCppKeywordRange(text, start, i)) ApplyColorRange(start, i, clrCommand);
             }
             else if (lang == 3) {
-                if (IsShellKeyword(word)) ApplyColorRange(start, i, clrCommand);
+                if (IsShellKeywordRange(text, start, i)) ApplyColorRange(start, i, clrCommand);
             }
             continue;
         }

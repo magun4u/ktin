@@ -1,0 +1,146 @@
+#ifndef KTIN_APP_VERSION_H
+#define KTIN_APP_VERSION_H
+
+// KTin GUI 표시와 리소스에 사용하는 중앙 버전.
+#define KTIN_APP_VER_MAJOR 2
+#define KTIN_APP_VER_MINOR 6
+#define KTIN_APP_VER_PATCH 0
+#define KTIN_APP_VER_BUILD 1
+#define KTIN_APP_VER_ALPHA_INDEX 4
+
+// 포함된 TinTin++ 기준 버전. KTin GUI 버전과 분리해서 관리한다.
+#define KTIN_TINTIN_VER_MAJOR 2
+#define KTIN_TINTIN_VER_MINOR 3
+#define KTIN_TINTIN_VER_PATCH 0
+#define KTIN_TINTIN_VER_BUILD 0
+
+#define KTIN_STR2(x) #x
+#define KTIN_STR(x) KTIN_STR2(x)
+#define KTIN_CAT2_(a, b) a##b
+#define KTIN_CAT2(a, b) KTIN_CAT2_(a, b)
+#define KTIN_2DIGIT(n) KTIN_CAT2(KTIN_2DIGIT_, n)
+
+#define KTIN_2DIGIT_0  "00"
+#define KTIN_2DIGIT_1  "01"
+#define KTIN_2DIGIT_2  "02"
+#define KTIN_2DIGIT_3  "03"
+#define KTIN_2DIGIT_4  "04"
+#define KTIN_2DIGIT_5  "05"
+#define KTIN_2DIGIT_6  "06"
+#define KTIN_2DIGIT_7  "07"
+#define KTIN_2DIGIT_8  "08"
+#define KTIN_2DIGIT_9  "09"
+#define KTIN_2DIGIT_10 "10"
+#define KTIN_2DIGIT_11 "11"
+#define KTIN_2DIGIT_12 "12"
+#define KTIN_2DIGIT_13 "13"
+#define KTIN_2DIGIT_14 "14"
+#define KTIN_2DIGIT_15 "15"
+#define KTIN_2DIGIT_16 "16"
+#define KTIN_2DIGIT_17 "17"
+#define KTIN_2DIGIT_18 "18"
+#define KTIN_2DIGIT_19 "19"
+#define KTIN_2DIGIT_20 "20"
+#define KTIN_2DIGIT_21 "21"
+#define KTIN_2DIGIT_22 "22"
+#define KTIN_2DIGIT_23 "23"
+#define KTIN_2DIGIT_24 "24"
+#define KTIN_2DIGIT_25 "25"
+#define KTIN_2DIGIT_26 "26"
+#define KTIN_2DIGIT_27 "27"
+#define KTIN_2DIGIT_28 "28"
+#define KTIN_2DIGIT_29 "29"
+#define KTIN_2DIGIT_30 "30"
+#define KTIN_2DIGIT_31 "31"
+#define KTIN_2DIGIT_32 "32"
+#define KTIN_2DIGIT_33 "33"
+#define KTIN_2DIGIT_34 "34"
+#define KTIN_2DIGIT_35 "35"
+#define KTIN_2DIGIT_36 "36"
+#define KTIN_2DIGIT_37 "37"
+#define KTIN_2DIGIT_38 "38"
+#define KTIN_2DIGIT_39 "39"
+#define KTIN_2DIGIT_40 "40"
+#define KTIN_2DIGIT_41 "41"
+#define KTIN_2DIGIT_42 "42"
+#define KTIN_2DIGIT_43 "43"
+#define KTIN_2DIGIT_44 "44"
+#define KTIN_2DIGIT_45 "45"
+#define KTIN_2DIGIT_46 "46"
+#define KTIN_2DIGIT_47 "47"
+#define KTIN_2DIGIT_48 "48"
+#define KTIN_2DIGIT_49 "49"
+#define KTIN_2DIGIT_50 "50"
+#define KTIN_2DIGIT_51 "51"
+#define KTIN_2DIGIT_52 "52"
+#define KTIN_2DIGIT_53 "53"
+#define KTIN_2DIGIT_54 "54"
+#define KTIN_2DIGIT_55 "55"
+#define KTIN_2DIGIT_56 "56"
+#define KTIN_2DIGIT_57 "57"
+#define KTIN_2DIGIT_58 "58"
+#define KTIN_2DIGIT_59 "59"
+#define KTIN_2DIGIT_60 "60"
+#define KTIN_2DIGIT_61 "61"
+#define KTIN_2DIGIT_62 "62"
+#define KTIN_2DIGIT_63 "63"
+#define KTIN_2DIGIT_64 "64"
+#define KTIN_2DIGIT_65 "65"
+#define KTIN_2DIGIT_66 "66"
+#define KTIN_2DIGIT_67 "67"
+#define KTIN_2DIGIT_68 "68"
+#define KTIN_2DIGIT_69 "69"
+#define KTIN_2DIGIT_70 "70"
+#define KTIN_2DIGIT_71 "71"
+#define KTIN_2DIGIT_72 "72"
+#define KTIN_2DIGIT_73 "73"
+#define KTIN_2DIGIT_74 "74"
+#define KTIN_2DIGIT_75 "75"
+#define KTIN_2DIGIT_76 "76"
+#define KTIN_2DIGIT_77 "77"
+#define KTIN_2DIGIT_78 "78"
+#define KTIN_2DIGIT_79 "79"
+#define KTIN_2DIGIT_80 "80"
+#define KTIN_2DIGIT_81 "81"
+#define KTIN_2DIGIT_82 "82"
+#define KTIN_2DIGIT_83 "83"
+#define KTIN_2DIGIT_84 "84"
+#define KTIN_2DIGIT_85 "85"
+#define KTIN_2DIGIT_86 "86"
+#define KTIN_2DIGIT_87 "87"
+#define KTIN_2DIGIT_88 "88"
+#define KTIN_2DIGIT_89 "89"
+#define KTIN_2DIGIT_90 "90"
+#define KTIN_2DIGIT_91 "91"
+#define KTIN_2DIGIT_92 "92"
+#define KTIN_2DIGIT_93 "93"
+#define KTIN_2DIGIT_94 "94"
+#define KTIN_2DIGIT_95 "95"
+#define KTIN_2DIGIT_96 "96"
+#define KTIN_2DIGIT_97 "97"
+#define KTIN_2DIGIT_98 "98"
+#define KTIN_2DIGIT_99 "99"
+
+#if KTIN_APP_VER_ALPHA_INDEX > 0
+#define KTIN_APP_VERSION_TEXT_A \
+    KTIN_STR(KTIN_APP_VER_MAJOR) "." \
+    KTIN_STR(KTIN_APP_VER_MINOR) "-a" \
+    KTIN_2DIGIT(KTIN_APP_VER_ALPHA_INDEX)
+#else
+#define KTIN_APP_VERSION_TEXT_A \
+    KTIN_STR(KTIN_APP_VER_MAJOR) "." \
+    KTIN_STR(KTIN_APP_VER_MINOR) "." \
+    KTIN_2DIGIT(KTIN_APP_VER_BUILD)
+#endif
+
+#define KTIN_APP_VERSION_TEXT_RC KTIN_APP_VERSION_TEXT_A "\0"
+
+#define KTIN_TINTIN_VERSION_TEXT_A \
+    KTIN_STR(KTIN_TINTIN_VER_MAJOR) "." \
+    KTIN_STR(KTIN_TINTIN_VER_MINOR) "." \
+    KTIN_STR(KTIN_TINTIN_VER_PATCH) "." \
+    KTIN_2DIGIT(KTIN_TINTIN_VER_BUILD)
+
+#define KTIN_TINTIN_VERSION_TEXT_RC KTIN_TINTIN_VERSION_TEXT_A "\0"
+
+#endif // KTIN_APP_VERSION_H

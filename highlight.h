@@ -14,9 +14,7 @@ extern HighlightState g_hiState;
 // 공개 함수
 void LoadHighlightSettings();
 void SaveHighlightSettings();
-#ifndef KTIN_MAIN_LOCAL_IMPL
 void ShowHighlightDialog(HWND owner);
-#endif
 
 void ExecuteHighlightRuleAction(const HighlightRule& rule, const std::vector<std::wstring>& caps);
 bool MatchHighlightPattern(const std::wstring& pattern, const std::wstring& text, std::vector<std::wstring>& caps);

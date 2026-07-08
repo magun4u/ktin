@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "settings.h"
 #include "auto_login.h"
+#include "win_util.h"
 #include <commctrl.h>
 
 
@@ -346,7 +347,7 @@ void BeginSwitchToAddressBookEntry(const AddressBookEntry& entry)
     g_app->pendingConnectEntry = entry;
     g_app->hasPendingConnect = true;
 
-    KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+    KillWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
 
     // 기존 세션 강제 종료
     // buildfix38: 주소록 세션뿐 아니라 빠른연결의 고정 세션명 new도 함께 종료합니다.
@@ -370,7 +371,7 @@ void BeginSwitchToAddressBookEntry(const AddressBookEntry& entry)
     g_app->g_detectCharsetRetry = 999;
 
     // ★★★ 타이머 시간을 500ms로 늘려서 #zap이 완전히 끝난 후 #session이 실행되도록 함 ★★★
-    SetTimer(g_app->hwndMain, ID_TIMER_SWITCH_CONNECT, 500, nullptr);
+    RestartWinTimer(g_app->hwndMain, ID_TIMER_SWITCH_CONNECT, 500);
 }
 
 void ConnectAddressBookEntry(const AddressBookEntry& entry)
@@ -388,7 +389,7 @@ void ConnectAddressBookEntry(const AddressBookEntry& entry)
     g_app->activeSession = entry;
     g_app->hasActiveSession = true;
 
-    KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+    KillWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
 
     // 접속 직후 60초 동안만 로그인 패턴을 검사합니다.
     StartAutoLoginWindowForAddressEntry(entry);

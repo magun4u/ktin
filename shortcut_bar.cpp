@@ -7,12 +7,12 @@
 #include "resource.h"
 #include "settings.h"
 #include "input.h"
+#include "win_util.h"
 #include <commctrl.h>
 
 // 외부에서 정의된 함수들 (extern 선언)
 extern void SendTextToMud(const wchar_t* text);
 extern void SendRawCommandToMud(const std::wstring& cmd);
-extern void LayoutChildren(HWND hwnd);
 extern HFONT GetPopupUIFont(HWND hwnd);
 extern std::wstring Trim(const std::wstring& str);
 extern void SaveFunctionKeySettings();   // functionkey.cpp에 있음
@@ -704,8 +704,7 @@ void InitializeShortcutButtons()
     if (g_app->hwndMain)
     {
         LayoutChildren(g_app->hwndMain);
-        InvalidateRect(g_app->hwndShortcutBar, nullptr, TRUE);
-        UpdateWindow(g_app->hwndShortcutBar);
+        InvalidateRect(g_app->hwndShortcutBar, nullptr, FALSE);
     }
 }
 
@@ -765,8 +764,7 @@ void ApplyShortcutButtons(HWND hwnd)
             0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-        InvalidateRect(hBtn, nullptr, TRUE);
-        UpdateWindow(hBtn);
+        InvalidateRect(hBtn, nullptr, FALSE);
 
         ShowWindow(hBtn, g_app->shortcutBarVisible ? SW_SHOW : SW_HIDE);
     }
@@ -774,15 +772,13 @@ void ApplyShortcutButtons(HWND hwnd)
     if (g_app->hwndShortcutBar && IsWindow(g_app->hwndShortcutBar))
     {
         ShowWindow(g_app->hwndShortcutBar, g_app->shortcutBarVisible ? SW_SHOW : SW_HIDE);
-        InvalidateRect(g_app->hwndShortcutBar, nullptr, TRUE);
-        UpdateWindow(g_app->hwndShortcutBar);
+        InvalidateRect(g_app->hwndShortcutBar, nullptr, FALSE);
     }
 
     if (hwnd && IsWindow(hwnd))
     {
         LayoutChildren(hwnd);
         InvalidateRect(hwnd, nullptr, FALSE);
-        UpdateWindow(hwnd);
     }
 }
 
@@ -794,3 +790,81 @@ int GetShortcutBarHeight()
     return g_app->shortcutBarVisible ? SHORTCUT_BAR_HEIGHT : 0;
 }
 
+// ==============================================
+// 단축 버튼 바 창 프로시저
+// ==============================================
+LRESULT CALLBACK ShortcutBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+    {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+
+        FillRect(hdc, &rc, GetSysColorBrush(COLOR_BTNFACE));
+
+        UniqueGdiObject hPenDark(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW)));
+        UniqueGdiObject hPenLight(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DHILIGHT)));
+        {
+            ScopedSelectObject penSel(hdc, hPenDark.Get());
+            MoveToEx(hdc, 0, 0, nullptr);
+            LineTo(hdc, rc.right, 0);
+        }
+        {
+            ScopedSelectObject penSel(hdc, hPenLight.Get());
+            MoveToEx(hdc, 0, rc.bottom - 1, nullptr);
+            LineTo(hdc, rc.right, rc.bottom - 1);
+        }
+        return 1;
+    }
+
+    case WM_PAINT:
+    {
+        ScopedPaintDC paint(hwnd);
+        HDC hdc = paint.Get();
+        if (!hdc) return 0;
+
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+
+        FillRect(hdc, &rc, GetSysColorBrush(COLOR_BTNFACE));
+
+        UniqueGdiObject hPenDark(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW)));
+        UniqueGdiObject hPenLight(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DHILIGHT)));
+        {
+            ScopedSelectObject penSel(hdc, hPenDark.Get());
+            MoveToEx(hdc, 0, 0, nullptr);
+            LineTo(hdc, rc.right, 0);
+        }
+        {
+            ScopedSelectObject penSel(hdc, hPenLight.Get());
+            MoveToEx(hdc, 0, rc.bottom - 1, nullptr);
+            LineTo(hdc, rc.right, rc.bottom - 1);
+        }
+
+        return 0;
+    }
+
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC: // ★ 토글 버튼은 Static 메시지로 올 때가 많습니다.
+    {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        // 버튼 텍스트 색상이 흰색 배경에 묻히지 않게 검정색으로 강제 설정
+        SetTextColor(hdc, RGB(0, 0, 0));
+        return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+    }
+
+    case WM_COMMAND:
+    {
+        HWND hParent = GetParent(hwnd);
+        if (hParent)
+            return (LRESULT)SendMessageW(hParent, WM_COMMAND, wParam, lParam);
+        return 0;
+    }
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}

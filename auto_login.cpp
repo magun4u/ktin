@@ -1,10 +1,11 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
 #include "terminal_buffer.h"
 #include "auto_login.h"
 #include "settings.h"
+#include "win_util.h"
 #include <algorithm>
 #include <cwctype>
 #include <ctime>
@@ -121,12 +122,10 @@ static void CheckAddressBookAutoReconnectFromText(const std::wstring& text)
     if (LooksLikeTinTinConnectionSuccess(text))
     {
         g_app->isConnected = true;
-        g_app->isSessionActive = true;
+        SetSessionActiveState(g_app->hwndMain, true);
         g_app->lastConnectionSuccessTick = GetTickCount();
-        if (g_app->sessionStartTime == 0)
-            g_app->sessionStartTime = time(NULL);
         if (g_app->hwndMain)
-            KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+            KillWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
         return;
     }
 
@@ -134,7 +133,7 @@ static void CheckAddressBookAutoReconnectFromText(const std::wstring& text)
         return;
 
     g_app->isConnected = false;
-    g_app->isSessionActive = false;
+    SetSessionActiveState(g_app->hwndMain, false);
     g_app->lastConnectionDownTick = GetTickCount();
     g_app->autoLoginWindowActive = false;
     g_app->keepAliveBlockedUntilTick = GetTickCount() + 3000;
@@ -144,8 +143,8 @@ static void CheckAddressBookAutoReconnectFromText(const std::wstring& text)
 
     if (g_app->hwndMain)
     {
-        KillTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
-        SetTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT, 3000, nullptr);
+        KillWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT);
+        StartWinTimer(g_app->hwndMain, ID_TIMER_AUTORECONNECT, 3000);
     }
 }
 
@@ -177,7 +176,7 @@ void StartAutoLoginWindowFromGlobal()
     g_app->lastConnectionSuccessTick = 0;
     g_app->lastConnectionDownTick = now;
     g_app->isConnected = false;
-    g_app->isSessionActive = false;
+    SetSessionActiveState(g_app->hwndMain, false);
     g_app->autoLoginStartTick = now;
     g_app->autoLoginWindowActive = true;
     g_app->autoLoginTriggered = false;
@@ -210,7 +209,7 @@ void StartAutoLoginWindowForAddressEntry(const AddressBookEntry& entry)
     g_app->lastConnectionSuccessTick = 0;
     g_app->lastConnectionDownTick = now;
     g_app->isConnected = false;
-    g_app->isSessionActive = false;
+    SetSessionActiveState(g_app->hwndMain, false);
     g_app->autoLoginStartTick = now;
     g_app->autoLoginWindowActive = true;
     g_app->autoLoginTriggered = false;

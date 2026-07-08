@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -7,6 +7,7 @@
 #include "variables.h"      // VariableItem 사용을 위해
 #include "resource.h"
 #include "settings.h"
+#include "win_util.h"
 #include <commctrl.h>
 #include <regex>
 
@@ -14,6 +15,36 @@
 // 전역 변수
 // ==============================================
 HighlightState g_hiState;
+
+struct BrushCache
+{
+    HBRUSH brush = nullptr;
+    COLORREF color = CLR_INVALID;
+};
+
+static BrushCache g_hiFgBrush;
+static BrushCache g_hiBgBrush;
+
+static HBRUSH GetCachedBrush(BrushCache& cache, COLORREF color)
+{
+    if (!cache.brush || cache.color != color)
+    {
+        ResetGdiObjectRef(cache.brush);
+        cache.brush = CreateSolidBrush(color);
+        cache.color = color;
+    }
+    return cache.brush ? cache.brush : GetSysColorBrush(COLOR_BTNFACE);
+}
+
+static void ClearBrushCache(BrushCache& cache)
+{
+    if (cache.brush)
+    {
+        ResetGdiObjectRef(cache.brush);
+    }
+    cache.color = CLR_INVALID;
+}
+
 
 // ==============================================
 // 내부 헬퍼 함수 (static)
@@ -263,8 +294,8 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_CTLCOLORSTATIC: {
         HDC hdc = (HDC)wParam; int id = GetDlgCtrlID((HWND)lParam);
         if (s_sel >= 0 && s_sel < (int)g_hiState.rules.size()) {
-            if (id == ID_HI_DET_FG) { SetBkColor(hdc, g_hiState.rules[s_sel].fg); return (INT_PTR)CreateSolidBrush(g_hiState.rules[s_sel].fg); }
-            if (id == ID_HI_DET_BG) { SetBkColor(hdc, g_hiState.rules[s_sel].bg); return (INT_PTR)CreateSolidBrush(g_hiState.rules[s_sel].bg); }
+            if (id == ID_HI_DET_FG) { SetBkColor(hdc, g_hiState.rules[s_sel].fg); return (INT_PTR)GetCachedBrush(g_hiFgBrush, g_hiState.rules[s_sel].fg); }
+            if (id == ID_HI_DET_BG) { SetBkColor(hdc, g_hiState.rules[s_sel].bg); return (INT_PTR)GetCachedBrush(g_hiBgBrush, g_hiState.rules[s_sel].bg); }
         }
         SetBkMode(hdc, TRANSPARENT);
         return (INT_PTR)GetSysColorBrush(COLOR_BTNFACE);
@@ -325,7 +356,7 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         else if (id == ID_HI_BTN_APPLY || id == IDOK) {
             SyncHiDataFromUI(hwnd, s_sel); g_hiState.active = !g_hiState.rules.empty(); SaveHighlightSettings();
             RefreshHiListBox(GetDlgItem(hwnd, ID_HI_LIST));
-            if (g_app->hwndLog) InvalidateRect(g_app->hwndLog, nullptr, TRUE);
+            if (g_app->hwndLog) InvalidateRect(g_app->hwndLog, nullptr, FALSE);
             if (id == IDOK) DestroyWindow(hwnd);
         }
         else if (id == ID_HI_BTN_UP) {
@@ -380,12 +411,12 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 ? GetSysColor(COLOR_HIGHLIGHTTEXT)
                 : GetSysColor(COLOR_WINDOWTEXT);
             COLORREF prefixColor = isOn ? RGB(0, 160, 0) : RGB(200, 40, 40);
-            HBRUSH hbr = CreateSolidBrush(bg);
-            FillRect(dis->hDC, &dis->rcItem, hbr);
-            DeleteObject(hbr);
+            UniqueGdiObject hbr(CreateSolidBrush(bg));
+            if (hbr.IsValid())
+                FillRect(dis->hDC, &dis->rcItem, (HBRUSH)hbr.Get());
             SetBkMode(dis->hDC, TRANSPARENT);
             HFONT hFont = GetPopupUIFont(hwnd);
-            HFONT hOld = (HFONT)SelectObject(dis->hDC, hFont);
+            ScopedSelectObject fontSel(dis->hDC, hFont);
             RECT rcPrefix = dis->rcItem;
             rcPrefix.left += 8;
             rcPrefix.right = rcPrefix.left + 36;
@@ -395,7 +426,6 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             DrawTextW(dis->hDC, text, 3, &rcPrefix, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
             SetTextColor(dis->hDC, mainText);
             DrawTextW(dis->hDC, text + 4, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-            SelectObject(dis->hDC, hOld);
             if (dis->itemState & ODS_FOCUS)
                 DrawFocusRect(dis->hDC, &dis->rcItem);
             return TRUE;
@@ -403,6 +433,10 @@ LRESULT CALLBACK HighlightDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         break;
     }
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    case WM_DESTROY:
+        ClearBrushCache(g_hiFgBrush);
+        ClearBrushCache(g_hiBgBrush);
+        return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }

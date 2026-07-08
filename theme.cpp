@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -10,6 +10,19 @@
 #include "auto_login.h"
 #include "log_tail.h"
 #include <commctrl.h>
+#include <algorithm>
+#include <new>
+#include <atomic>
+#include <memory>
+#include <thread>
+#include <string_view>
+#include "win_util.h"
+
+namespace
+{
+    constexpr size_t kMaxAnsiCsiParamBytes = 128;
+    constexpr size_t kMaxAnsiOscParamBytes = 8192;
+}
 
 // ==============================================
 // ANSI 테마 테이블
@@ -47,14 +60,25 @@ static const ThemeInfo kAnsiThemes[] =
 };
 
 static const int kAnsiThemeCount = (int)(sizeof(kAnsiThemes) / sizeof(kAnsiThemes[0]));
+static std::atomic<unsigned int> s_themeRecolorSerial{0};
 
 // ==============================================
 // Utf8Decoder 멤버 함수 구현
 // ==============================================
 std::wstring Utf8Decoder::Feed(const std::string& bytes)
 {
-    buffer_ += bytes;
+    if (bytes.empty() && buffer_.empty())
+        return L"";
+
+    if (!bytes.empty())
+    {
+        if (buffer_.capacity() < buffer_.size() + bytes.size())
+            buffer_.reserve(buffer_.size() + bytes.size());
+        buffer_.append(bytes);
+    }
+
     std::wstring out;
+    out.reserve(buffer_.size());
 
     while (!buffer_.empty())
     {
@@ -110,12 +134,8 @@ std::wstring Utf8Decoder::Feed(const std::string& bytes)
 
 std::wstring Utf8Decoder::Flush()
 {
-    std::wstring out;
-    while (!buffer_.empty())
-    {
-        out.push_back(L'\uFFFD');
-        buffer_.erase(0, 1);
-    }
+    std::wstring out(buffer_.size(), L'\uFFFD');
+    buffer_.clear();
     return out;
 }
 
@@ -147,22 +167,39 @@ void AnsiToRunsParser::SyncTheme()
     }
 }
 
-std::vector<StyledRun> AnsiToRunsParser::Feed(const char* data, size_t len)
+bool AnsiToRunsParser::Feed(const char* data, size_t len)
 {
     SyncTheme();
+    dirty_ = false;
+
+    if (!data || len == 0)
+        return false;
+
+    if (state_ == State::Normal)
+    {
+        const size_t wanted = textBytes_.size() + len;
+        if (textBytes_.capacity() < wanted)
+            textBytes_.reserve(std::min<size_t>(wanted, textBytes_.size() + 65536));
+    }
+
     for (size_t i = 0; i < len; ++i)
         Consume(data[i]);
 
     if (state_ == State::Normal && !textBytes_.empty())
         FlushText();
 
-    return TakeOutput();
+    const bool changed = dirty_;
+    dirty_ = false;
+    return changed;
 }
 
-std::vector<StyledRun> AnsiToRunsParser::Flush()
+bool AnsiToRunsParser::Flush()
 {
+    dirty_ = false;
     FlushText();
-    return TakeOutput();
+    const bool changed = dirty_;
+    dirty_ = false;
+    return changed;
 }
 
 void AnsiToRunsParser::ResetStyle()
@@ -226,31 +263,15 @@ void AnsiToRunsParser::FlushText()
     }
 }
 
-void AnsiToRunsParser::AppendRun(std::wstring text)
+void AnsiToRunsParser::AppendRun(const std::wstring& text)
 {
-    if (text.empty()) return;
+    if (text.empty())
+        return;
 
-    // 1) termBuffer에는 원본 텍스트 그대로 넣는다.
-    //    RichEdit용 개행 정규화를 여기서 먼저 해버리면
-    //    단독 '\r' 까지 '\r\n' 으로 바뀌어서
-    //    터미널 줄 분리가 발생할 수 있다.
     if (g_app && g_app->termBuffer)
     {
-        for (wchar_t c : text)
-            g_app->termBuffer->PutChar(c, style_.fg, style_.bg, style_.bold);
-    }
-
-    // 2) RichEdit 출력용 텍스트만 별도로 정규화
-    NormalizeRunTextForRichEdit(text);
-
-    if (!output_.empty() && output_.back().style == style_) {
-        output_.back().text += text;
-    }
-    else {
-        StyledRun run;
-        run.style = style_;
-        run.text = std::move(text);
-        output_.push_back(std::move(run));
+        g_app->termBuffer->AppendText(text, style_.fg, style_.bg, style_.bold);
+        dirty_ = true;
     }
 }
 
@@ -329,7 +350,10 @@ void AnsiToRunsParser::Consume(char ch)
         break;
     case State::Csi:
         if ((ch >= '0' && ch <= '9') || ch == ';') {
-            csiParams_.push_back(ch);
+            if (csiParams_.size() < kMaxAnsiCsiParamBytes)
+                csiParams_.push_back(ch);
+            else
+                state_ = State::CsiDiscard;
         }
         else if (ch == 'm') {
             HandleSgr();
@@ -344,6 +368,13 @@ void AnsiToRunsParser::Consume(char ch)
             state_ = State::Normal;
         }
         break;
+    case State::CsiDiscard:
+        if (ch >= 0x40 && ch <= 0x7E)
+        {
+            csiParams_.clear();
+            state_ = State::Normal;
+        }
+        break;
     case State::Osc:
         if (ch == 0x07) { // ★ BEL(0x07) 문자를 만나면 신호 수집 완료!
             HandleOsc();  // ★ 모아둔 데이터를 해석해서 메인창으로 보냅니다.
@@ -353,7 +384,13 @@ void AnsiToRunsParser::Consume(char ch)
             state_ = State::OscEsc;
         }
         else {
-            oscParams_.push_back(ch); // ★ 신호 내용을 차곡차곡 수집합니다.
+            if (oscParams_.size() < kMaxAnsiOscParamBytes)
+                oscParams_.push_back(ch); // ★ 신호 내용을 차곡차곡 수집합니다.
+            else
+            {
+                oscParams_.clear();
+                state_ = State::OscDiscard;
+            }
         }
         break;
     case State::OscEsc:
@@ -362,19 +399,29 @@ void AnsiToRunsParser::Consume(char ch)
             state_ = State::Normal;
         }
         else {
-            oscParams_.push_back(0x1B); // ESC 문자가 종료용이 아니었다면 다시 버퍼에 넣음
-            oscParams_.push_back(ch);
-            state_ = State::Osc;
+            if (oscParams_.size() + 2 <= kMaxAnsiOscParamBytes)
+            {
+                oscParams_.push_back(0x1B); // ESC 문자가 종료용이 아니었다면 다시 버퍼에 넣음
+                oscParams_.push_back(ch);
+                state_ = State::Osc;
+            }
+            else
+            {
+                oscParams_.clear();
+                state_ = State::OscDiscard;
+            }
         }
         break;
+    case State::OscDiscard:
+        if (ch == 0x07)
+            state_ = State::Normal;
+        else if (ch == 0x1B)
+            state_ = State::OscDiscardEsc;
+        break;
+    case State::OscDiscardEsc:
+        state_ = (ch == '\\') ? State::Normal : State::OscDiscard;
+        break;
     }
-}
-
-std::vector<StyledRun> AnsiToRunsParser::TakeOutput()
-{
-    std::vector<StyledRun> out;
-    out.swap(output_);
-    return out;
 }
 
 // ==============================================
@@ -506,14 +553,13 @@ static void DrawAnsiThemePreview(HDC hdc, const RECT& rc, int themeId)
     const COLORREF* table = GetAnsiThemeTable(themeId);
     ThemeVisuals tv = GetThemeVisuals(themeId);
 
-    HBRUSH hBack = CreateSolidBrush(tv.logBack);
-    FillRect(hdc, &rc, hBack);
-    DeleteObject(hBack);
+    UniqueGdiObject hBack(CreateSolidBrush(tv.logBack));
+    if (hBack.IsValid())
+        FillRect(hdc, &rc, (HBRUSH)hBack.Get());
 
     RECT titlePanel = { rc.left + 12, rc.top + 12, rc.right - 12, rc.top + 64 };
-    HBRUSH hTitle = CreateSolidBrush(tv.logBack);
-    FillRect(hdc, &titlePanel, hTitle);
-    DeleteObject(hTitle);
+    if (hBack.IsValid())
+        FillRect(hdc, &titlePanel, (HBRUSH)hBack.Get());
 
     int left = rc.left + 18;
     int top = rc.top + 18;
@@ -523,10 +569,10 @@ static void DrawAnsiThemePreview(HDC hdc, const RECT& rc, int themeId)
     for (int i = 0; i < 8; ++i)
     {
         RECT cell = { left + i * (box + gap), top, left + i * (box + gap) + box, top + box };
-        HBRUSH b = CreateSolidBrush(table[i]);
-        FillRect(hdc, &cell, b);
+        UniqueGdiObject b(CreateSolidBrush(table[i]));
+        if (b.IsValid())
+            FillRect(hdc, &cell, (HBRUSH)b.Get());
         FrameRect(hdc, &cell, (HBRUSH)GetStockObject(GRAY_BRUSH));
-        DeleteObject(b);
     }
 
     top += box + 8;
@@ -534,19 +580,18 @@ static void DrawAnsiThemePreview(HDC hdc, const RECT& rc, int themeId)
     for (int i = 8; i < 16; ++i)
     {
         RECT cell = { left + (i - 8) * (box + gap), top, left + (i - 8) * (box + gap) + box, top + box };
-        HBRUSH b = CreateSolidBrush(table[i]);
-        FillRect(hdc, &cell, b);
+        UniqueGdiObject b(CreateSolidBrush(table[i]));
+        if (b.IsValid())
+            FillRect(hdc, &cell, (HBRUSH)b.Get());
         FrameRect(hdc, &cell, (HBRUSH)GetStockObject(GRAY_BRUSH));
-        DeleteObject(b);
     }
 
     RECT textPanel = { rc.left + 12, rc.top + 78, rc.right - 12, rc.bottom - 12 };
-    HBRUSH hPanel = CreateSolidBrush(tv.logBack);
-    FillRect(hdc, &textPanel, hPanel);
-    DeleteObject(hPanel);
+    if (hBack.IsValid())
+        FillRect(hdc, &textPanel, (HBRUSH)hBack.Get());
 
     SetBkMode(hdc, TRANSPARENT);
-    HFONT hOldFont = (HFONT)SelectObject(hdc, g_app ? g_app->hFontLog : (HFONT)GetStockObject(DEFAULT_GUI_FONT));
+    ScopedSelectObject fontSelect(hdc, g_app ? g_app->hFontLog : (HFONT)GetStockObject(DEFAULT_GUI_FONT));
 
     int textY = rc.top + 88;
 
@@ -598,24 +643,49 @@ static void DrawAnsiThemePreview(HDC hdc, const RECT& rc, int themeId)
     SetTextColor(hdc, tv.inputText);
     TextOutW(hdc, left, textY, L"[입력창 예시] 점수", 13);
 
-    SelectObject(hdc, hOldFont);
 }
 
 static bool IsKnownThemeLogBackColor(COLORREF c)
 {
-    const int themes[] = {
-        ID_THEME_WINDOWS, ID_THEME_XTERM, ID_THEME_CAMPBELL, ID_THEME_POWERSHELL,
-        ID_THEME_ALMALINUX, ID_THEME_DARKPLUS, ID_THEME_DIMIDIUM, ID_THEME_IBM5153,
-        ID_THEME_ONE_HALF_DARK, ID_THEME_ONE_HALF_LIGHT, ID_THEME_OTTOSSON,
-        ID_THEME_SOLARIZED_DARK, ID_THEME_SOLARIZED_LIGHT, ID_THEME_TANGO_DARK,
-        ID_THEME_TANGO_LIGHT, ID_THEME_UBUNTU, ID_THEME_UBUNTU_2004,
-        ID_THEME_UBUNTU_2204, ID_THEME_UBUNTU_COLOR, ID_THEME_VINTAGE, ID_THEME_CGA
-    };
+    // RecolorTheme() calls this for every terminal cell. Build the theme
+    // background table once so a theme change does not repeatedly walk the
+    // full theme registry for each history/live cell.
+    static bool initialized = false;
+    static COLORREF knownBacks[32] = {};
+    static int knownCount = 0;
 
-    for (int i = 0; i < (int)(sizeof(themes) / sizeof(themes[0])); ++i)
+    if (!initialized)
     {
-        ThemeVisuals tv = GetThemeVisuals(themes[i]);
-        if (c == tv.logBack)
+        const int themes[] = {
+            ID_THEME_WINDOWS, ID_THEME_XTERM, ID_THEME_CAMPBELL, ID_THEME_POWERSHELL,
+            ID_THEME_ALMALINUX, ID_THEME_DARKPLUS, ID_THEME_DIMIDIUM, ID_THEME_IBM5153,
+            ID_THEME_ONE_HALF_DARK, ID_THEME_ONE_HALF_LIGHT, ID_THEME_OTTOSSON,
+            ID_THEME_SOLARIZED_DARK, ID_THEME_SOLARIZED_LIGHT, ID_THEME_TANGO_DARK,
+            ID_THEME_TANGO_LIGHT, ID_THEME_UBUNTU, ID_THEME_UBUNTU_2004,
+            ID_THEME_UBUNTU_2204, ID_THEME_UBUNTU_COLOR, ID_THEME_VINTAGE, ID_THEME_CGA
+        };
+
+        for (int i = 0; i < (int)(sizeof(themes) / sizeof(themes[0])) && knownCount < (int)(sizeof(knownBacks) / sizeof(knownBacks[0])); ++i)
+        {
+            ThemeVisuals tv = GetThemeVisuals(themes[i]);
+            bool exists = false;
+            for (int j = 0; j < knownCount; ++j)
+            {
+                if (knownBacks[j] == tv.logBack)
+                {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists)
+                knownBacks[knownCount++] = tv.logBack;
+        }
+        initialized = true;
+    }
+
+    for (int i = 0; i < knownCount; ++i)
+    {
+        if (knownBacks[i] == c)
             return true;
     }
     return false;
@@ -641,34 +711,20 @@ void ApplyThemeVisualsToApp(int themeId)
 
     if (g_app->termBuffer)
     {
-        std::lock_guard<std::recursive_mutex> lock(g_app->termBuffer->mtx);
+        std::shared_ptr<TerminalBuffer> buffer = g_app->termBuffer;
+        HWND notifyHwnd = g_app->hwndMain;
+        const unsigned int recolorSerial = ++s_themeRecolorSerial;
+        buffer->SetDefaultColors(tv.logBack, tv.logText);
+        std::thread([buffer, notifyHwnd, oldBg, oldFg, newBg = tv.logBack, newFg = tv.logText, recolorSerial]() {
+            if (recolorSerial != s_themeRecolorSerial.load())
+                return;
 
-        COLORREF prevDefaultBg = g_app->termBuffer->defaultBg;
-        COLORREF prevDefaultFg = g_app->termBuffer->defaultFg;
+            if (buffer)
+                buffer->RecolorExistingTheme(oldBg, oldFg, newBg, newFg, IsKnownThemeLogBackColor);
 
-        g_app->termBuffer->defaultBg = tv.logBack;
-        g_app->termBuffer->defaultFg = tv.logText;
-
-        for (auto& c : g_app->termBuffer->cells)
-        {
-            if (c.bg == oldBg || c.bg == prevDefaultBg || IsKnownThemeLogBackColor(c.bg))
-                c.bg = tv.logBack;
-
-            if (c.fg == oldFg || c.fg == prevDefaultFg)
-                c.fg = tv.logText;
-        }
-
-        for (auto& row : g_app->termBuffer->history)
-        {
-            for (auto& c : row)
-            {
-                if (c.bg == oldBg || c.bg == prevDefaultBg || IsKnownThemeLogBackColor(c.bg))
-                    c.bg = tv.logBack;
-
-                if (c.fg == oldFg || c.fg == prevDefaultFg)
-                    c.fg = tv.logText;
-            }
-        }
+            if (recolorSerial == s_themeRecolorSerial.load() && notifyHwnd && IsWindow(notifyHwnd))
+                PostMessageW(notifyHwnd, WM_APP_THEME_RECOLOR_DONE, 0, 0);
+        }).detach();
     }
 
     for (int i = 0; i < (int)(sizeof(g_app->hwndEdit) / sizeof(g_app->hwndEdit[0])); ++i)
@@ -684,8 +740,7 @@ void ApplyThemeVisualsToApp(int themeId)
             cf.crBackColor = g_app->inputStyle.backColor;
             SendMessageW(g_app->hwndEdit[i], EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
 
-            InvalidateRect(g_app->hwndEdit[i], nullptr, TRUE);
-            UpdateWindow(g_app->hwndEdit[i]);
+            InvalidateRect(g_app->hwndEdit[i], nullptr, FALSE);
         }
     }
 
@@ -700,16 +755,14 @@ void ApplyThemeVisualsToApp(int themeId)
         cf.crBackColor = g_app->chatStyle.backColor;
         SendMessageW(g_app->hwndChat, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
 
-        InvalidateRect(g_app->hwndChat, nullptr, TRUE);
-        UpdateWindow(g_app->hwndChat);
+        InvalidateRect(g_app->hwndChat, nullptr, FALSE);
     }
 
     ApplyStyles();
 
     if (g_app->hwndInput)
     {
-        InvalidateRect(g_app->hwndInput, nullptr, TRUE);
-        UpdateWindow(g_app->hwndInput);
+        InvalidateRect(g_app->hwndInput, nullptr, FALSE);
     }
 
     if (g_app->hwndLog)
@@ -724,15 +777,13 @@ void ApplyThemeVisualsToApp(int themeId)
 
         SendMessageW(g_app->hwndLog, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
 
-        InvalidateRect(g_app->hwndLog, nullptr, TRUE);
-        UpdateWindow(g_app->hwndLog);
+        InvalidateRect(g_app->hwndLog, nullptr, FALSE);
     }
 
     if (g_app->hwndMain)
     {
         LayoutChildren(g_app->hwndMain);
-        InvalidateRect(g_app->hwndMain, nullptr, TRUE);
-        UpdateWindow(g_app->hwndMain);
+        InvalidateRect(g_app->hwndMain, nullptr, FALSE);
     }
 }
 
@@ -747,13 +798,13 @@ static LRESULT CALLBACK ThemePreviewProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     {
     case WM_PAINT:
     {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        ScopedPaintDC paint(hwnd);
+        HDC hdc = paint.Get();
+        if (!hdc) return 0;
         RECT rc;
         GetClientRect(hwnd, &rc);
         int themeId = (state ? state->selectedTheme : ID_THEME_WINDOWS);
         DrawAnsiThemePreview(hdc, rc, themeId);
-        EndPaint(hwnd, &ps);
         return 0;
     }
     }
@@ -828,8 +879,7 @@ static LRESULT CALLBACK ThemeDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
                 if (sel >= 0 && sel < kAnsiThemeCount)
                 {
                     state->selectedTheme = kAnsiThemes[sel].id;
-                    InvalidateRect(state->hwndPreview, nullptr, TRUE);
-                    UpdateWindow(state->hwndPreview);
+                    InvalidateRect(state->hwndPreview, nullptr, FALSE);
                 }
             }
             return 0;
@@ -864,17 +914,15 @@ static LRESULT CALLBACK ThemeDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             SendMessageW(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
             COLORREF bg = (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
             COLORREF fg = (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetSysColor(COLOR_WINDOWTEXT);
-            HBRUSH hbr = CreateSolidBrush(bg);
-            FillRect(dis->hDC, &dis->rcItem, hbr);
-            DeleteObject(hbr);
+            UniqueGdiObject hbr(CreateSolidBrush(bg));
+            if (hbr.IsValid())
+                FillRect(dis->hDC, &dis->rcItem, (HBRUSH)hbr.Get());
             SetBkMode(dis->hDC, TRANSPARENT);
             SetTextColor(dis->hDC, fg);
-            HFONT hFont = GetPopupUIFont(hwnd);
-            HFONT old = (HFONT)SelectObject(dis->hDC, hFont);
+            ScopedSelectObject fontSelect(dis->hDC, GetPopupUIFont(hwnd));
             RECT rc = dis->rcItem;
             rc.left += 8;
             DrawTextW(dis->hDC, text, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-            SelectObject(dis->hDC, old);
             return TRUE;
         }
         break;
@@ -989,24 +1037,24 @@ void ApplyStyles() {
     logLf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
     logLf.lfOutPrecision = OUT_TT_ONLY_PRECIS;
 
-    HFONT newLogFont = CreateFontIndirectW(&logLf);
-    HFONT newInputFont = CreateFontIndirectW(&g_app->inputStyle.font);
-    HFONT newChatFont = CreateFontIndirectW(&g_app->chatStyle.font);
+    UniqueGdiObject newLogFont(CreateFontIndirectW(&logLf));
+    UniqueGdiObject newInputFont(CreateFontIndirectW(&g_app->inputStyle.font));
+    UniqueGdiObject newChatFont(CreateFontIndirectW(&g_app->chatStyle.font));
 
-    if (!newLogFont || !newInputFont || !newChatFont) {
-        if (newLogFont) DeleteObject(newLogFont);
-        if (newInputFont) DeleteObject(newInputFont);
-        if (newChatFont) DeleteObject(newChatFont);
+    if (!newLogFont.IsValid() || !newInputFont.IsValid() || !newChatFont.IsValid())
         return;
-    }
 
-    HFONT oldLog = g_app->hFontLog;
-    HFONT oldInput = g_app->hFontInput;
-    HFONT oldChat = g_app->hFontChat;
+    UniqueGdiObject oldLog(g_app->hFontLog);
+    UniqueGdiObject oldInput(g_app->hFontInput);
+    UniqueGdiObject oldChat(g_app->hFontChat);
+    (void)oldLog;
+    (void)oldInput;
+    (void)oldChat;
 
-    g_app->hFontLog = newLogFont;
-    g_app->hFontInput = newInputFont;
-    g_app->hFontChat = newChatFont;
+    g_app->hFontLog = (HFONT)newLogFont.Release();
+    g_app->hFontInput = (HFONT)newInputFont.Release();
+    g_app->hFontChat = (HFONT)newChatFont.Release();
+    ResetLogCellPixelSizeCache();
 
     RebuildInputBrushes();
 
@@ -1019,7 +1067,7 @@ void ApplyStyles() {
     if (g_app->hwndChat) {
         SendMessageW(g_app->hwndChat, WM_SETFONT, (WPARAM)g_app->hFontChat, TRUE);
         SetupChatRichEditDefaults(g_app->hwndChat);
-        InvalidateRect(g_app->hwndChat, nullptr, TRUE);
+        InvalidateRect(g_app->hwndChat, nullptr, FALSE);
     }
 
     for (int i = 0; i < INPUT_ROWS; ++i) {
@@ -1027,7 +1075,7 @@ void ApplyStyles() {
             SendMessageW(g_app->hwndEdit[i], WM_SETFONT, (WPARAM)g_app->hFontInput, TRUE);
             SendMessageW(g_app->hwndEdit[i], EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(0, 0));
             SetWindowTheme(g_app->hwndEdit[i], L"", L"");
-            InvalidateRect(g_app->hwndEdit[i], nullptr, TRUE);
+            InvalidateRect(g_app->hwndEdit[i], nullptr, FALSE);
         }
     }
 
@@ -1038,19 +1086,15 @@ void ApplyStyles() {
                 WM_SETFONT,
                 (WPARAM)GetShortcutButtonUIFont(g_app->hwndMain ? g_app->hwndMain : g_app->hwndShortcutButtons[i]),
                 TRUE);
-            InvalidateRect(g_app->hwndShortcutButtons[i], nullptr, TRUE);
+            InvalidateRect(g_app->hwndShortcutButtons[i], nullptr, FALSE);
         }
     }
 
     if (g_app->hwndShortcutBar)
-        InvalidateRect(g_app->hwndShortcutBar, nullptr, TRUE);
+        InvalidateRect(g_app->hwndShortcutBar, nullptr, FALSE);
 
     // buildfix26: 이미 열려 있는 갈무리 보기 창도 메인 출력창 폰트를 즉시 따라가게 합니다.
     ApplyTailWindowFonts();
-
-    if (oldLog) DeleteObject(oldLog);
-    if (oldInput) DeleteObject(oldInput);
-    if (oldChat) DeleteObject(oldChat);
 
     RecalcInputMetrics();
 
@@ -1058,13 +1102,13 @@ void ApplyStyles() {
         LayoutChildren(g_app->hwndMain);
 
     if (g_app->hwndLog)
-        InvalidateRect(g_app->hwndLog, nullptr, TRUE);
+        InvalidateRect(g_app->hwndLog, nullptr, FALSE);
 
     if (g_app->hwndInput)
-        InvalidateRect(g_app->hwndInput, nullptr, TRUE);
+        InvalidateRect(g_app->hwndInput, nullptr, FALSE);
 
     if (g_app->hwndMain)
-        InvalidateRect(g_app->hwndMain, nullptr, TRUE);
+        InvalidateRect(g_app->hwndMain, nullptr, FALSE);
 
     if (g_app->proc.hPC)
         ResizePseudoConsoleToLogWindow();
@@ -1076,31 +1120,66 @@ void ApplyStyles() {
     }
 }
 
+
+namespace
+{
+    constexpr size_t kMaxGuiVarNameBytes = 256;
+    constexpr size_t kMaxGuiVarValueBytes = 4096;
+
+    bool PostGuiVarUpdate(std::string_view nameBytes, std::string_view valueBytes)
+    {
+        if (!g_app || !g_app->hwndMain || nameBytes.empty() ||
+            nameBytes.size() > kMaxGuiVarNameBytes ||
+            valueBytes.size() > kMaxGuiVarValueBytes)
+        {
+            return false;
+        }
+
+        std::string nameUtf8(nameBytes);
+        std::string valueUtf8(valueBytes);
+        std::wstring* name = new (std::nothrow) std::wstring(Utf8ToWide(nameUtf8));
+        std::wstring* value = new (std::nothrow) std::wstring(Utf8ToWide(valueUtf8));
+        if (!name || !value)
+        {
+            delete name;
+            delete value;
+            return false;
+        }
+
+        if (!PostMessageW(g_app->hwndMain, WM_APP_VAR_UPDATE,
+            reinterpret_cast<WPARAM>(name), reinterpret_cast<LPARAM>(value)))
+        {
+            delete name;
+            delete value;
+            return false;
+        }
+        return true;
+    }
+}
+
 void AnsiToRunsParser::HandleOsc()
 {
     // oscParams_에 담긴 내용이 비어있거나 앱 객체가 없으면 중단
     if (oscParams_.empty() || !g_app) return;
 
-    // OSC 신호는 보통 "번호;데이터" 형식입니다. 
+    // OSC 신호는 보통 "번호;데이터" 형식입니다.
     // 우리가 보낸 신호는 "0;GUI_VAR:..." 형태이므로 이를 분석합니다.
-    size_t semi = oscParams_.find(';');
-    if (semi != std::string::npos) {
-        std::string type = oscParams_.substr(0, semi);
-        std::string payload = oscParams_.substr(semi + 1);
+    constexpr std::string_view kGuiVarPrefix = "GUI_VAR:";
+    std::string_view osc(oscParams_);
+    size_t semi = osc.find(';');
+    if (semi != std::string_view::npos) {
+        std::string_view type = osc.substr(0, semi);
+        std::string_view payload = osc.substr(semi + 1);
 
         // 창 제목 변경 규약(0번 또는 2번)을 가로채서 GUI 변수 업데이트용으로 사용
-        if ((type == "0" || type == "2") && payload.find("GUI_VAR:") == 0) {
-            std::string varData = payload.substr(8); // "GUI_VAR:" 이후의 문자열 ("변수명=값")
+        if (type.size() == 1 && (type[0] == '0' || type[0] == '2') &&
+            payload.size() >= kGuiVarPrefix.size() &&
+            payload.compare(0, kGuiVarPrefix.size(), kGuiVarPrefix) == 0) {
+            std::string_view varData = payload.substr(kGuiVarPrefix.size());
             size_t eq = varData.find('=');
 
-            if (eq != std::string::npos) {
-                // 변수 이름과 값을 추출하여 유니코드로 변환
-                std::wstring* pName = new std::wstring(Utf8ToWide(varData.substr(0, eq)));
-                std::wstring* pVal = new std::wstring(Utf8ToWide(varData.substr(eq + 1)));
-
-                // ★ 메인 윈도우로 "변수 업데이트해!"라고 택배(PostMessage)를 보냄
-                // 여기서 보낸 택배는 main.cpp의 WM_APP + 4 케이스에서 받게 됩니다.
-                PostMessageW(g_app->hwndMain, WM_APP + 4, (WPARAM)pName, (LPARAM)pVal);
+            if (eq != std::string_view::npos) {
+                PostGuiVarUpdate(varData.substr(0, eq), varData.substr(eq + 1));
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -41,6 +41,10 @@ using std::max;
 #define WM_APP_LOG_CHUNK            (WM_APP + 1)
 #define WM_APP_PROCESS_EXIT         (WM_APP + 2)
 #define WM_APP_TRAYICON             (WM_APP + 3)
+#define WM_APP_VAR_UPDATE           (WM_APP + 4)
+#define WM_APP_START_BACKEND        (WM_APP + 5)
+#define WM_APP_HISTORY_EXPORT_DONE  (WM_APP + 6)
+#define WM_APP_THEME_RECOLOR_DONE   (WM_APP + 7)
 
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x00020016
@@ -92,6 +96,7 @@ static const int ID_MENU_FILE_NEW_WINDOW = 1026;
 
 static const int ID_LOG_COPY = 1101;
 static const int ID_LOG_CLEAR_CHAT = 1102;
+static const int ID_TIMER_SESSION_UPTIME = 2000;
 static const int ID_TIMER_DEFER_SAVE = 2001;
 static const int ID_TIMER_KEEPALIVE = 2002;
 static const int ID_TIMER_LOG_REDRAW = 2003;
