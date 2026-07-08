@@ -1,24 +1,38 @@
-# Build outputs
 *.o
 *.obj
 *.res
 *.aps
 *.exe
+*.exe.manifest
+*.manifest
 *.pdb
 *.ilk
+*.exp
+*.lib
+*.dll
 *.idb
-*.log
-*.tmp
+*.ipdb
+*.iobj
+*.tlog
+*.lastbuildstate
+
 build/
+dist/
+out/
+x64/
+x86/
 Debug/
 Release/
-x64/
-Win32/
+.vs/
 
-# Local runtime files
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+*.swn
+
 config.ini
 sessions.ini
-bin/
-
-# Keep source-side manifest tracked if needed
-!ktin.exe.manifest
+log/
+logs/
