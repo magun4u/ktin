@@ -34,3 +34,8 @@ WSL에서 MinGW-w64 교차 컴파일러로 Windows용 ktin.exe를 만든다.
    x86_64-w64-mingw32-g++ --version
    x86_64-w64-mingw32-windres --version
 
+7. 빌드 산출물 정리
+
+   make clean
+
+   clean은 ktin.exe, *.o, *.obj, *.res, *.aps 파일을 삭제한다.

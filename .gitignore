@@ -1,0 +1,24 @@
+# Build outputs
+*.o
+*.obj
+*.res
+*.aps
+*.exe
+*.pdb
+*.ilk
+*.idb
+*.log
+*.tmp
+build/
+Debug/
+Release/
+x64/
+Win32/
+
+# Local runtime files
+config.ini
+sessions.ini
+bin/
+
+# Keep source-side manifest tracked if needed
+!ktin.exe.manifest

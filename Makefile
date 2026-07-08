@@ -36,3 +36,4 @@ $(RESOBJ): Resource.rc resource.h ktin.ico
 
 clean:
 	$(RM) $(OBJS) $(RESOBJ) $(TARGET)
+	find . \( -name "*.o" -o -name "*.obj" -o -name "*.res" -o -name "*.aps" \) -type f -delete
