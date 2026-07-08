@@ -76,6 +76,7 @@ extern const int g_lineSetsCount;
 // 주요 함수 선언
 void OpenMemoWindow(HWND owner);
 
+#ifndef KTIN_MEMO_LOCAL_IMPL
 bool MemoOpenFile(HWND hwnd, const std::wstring& path);
 bool MemoSaveFile(HWND hwnd, const std::wstring& path);
 
@@ -89,3 +90,4 @@ void SetMemoThemeBaseColors(int themeIdx);
 
 LRESULT CALLBACK MemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK MemoEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif

@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -8,6 +8,7 @@
 #include "resource.h"
 #include "settings.h"
 #include "log_tail.h"
+#include "win_util.h"
 #include <commctrl.h>
 
 // ==============================================
@@ -29,8 +30,9 @@ LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
     case WM_PAINT:
     {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        ScopedPaintDC paint(hwnd);
+        HDC hdc = paint.Get();
+        if (!hdc) return 0;
 
         RECT rc;
         GetClientRect(hwnd, &rc);
@@ -42,14 +44,14 @@ LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(0, 0, 0)); // 글자색 검정
             HFONT hFont = GetShortcutButtonUIFont(hwnd);
-            HFONT hOld = (HFONT)SelectObject(hdc, hFont);
+            ScopedSelectObject fontSel(hdc, hFont);
 
             int count = g_app->statusPartCount;
             // ★ 크래시 방지 안전벨트
             if (count < 1) count = 1;
             if (count > 5) count = 5;
 
-            int partW = (rc.right - rc.left) / count; // 한 칸의 너비 계산
+            int partW = RectWidth(rc) / count; // 한 칸의 너비 계산
 
             for (int i = 0; i < count; ++i) {
                 std::wstring text = ExpandStatusVariables(g_app->statusFormats[i]);
@@ -66,15 +68,12 @@ LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 DrawTextW(hdc, text.c_str(), -1, &partRc, alignFlag | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
                 // 칸 구분선 그리기 (마지막 칸이 아닐 때만)
                 if (i < count - 1) {
-                    HPEN hPen = CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW));
-                    HGDIOBJ oldP = SelectObject(hdc, hPen);
+                    UniqueGdiObject hPen(CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DSHADOW)));
+                    ScopedSelectObject penSel(hdc, hPen.Get());
                     MoveToEx(hdc, rc.left + ((i + 1) * partW), rc.top + 4, NULL);
                     LineTo(hdc, rc.left + ((i + 1) * partW), rc.bottom - 4);
-                    SelectObject(hdc, oldP);
-                    DeleteObject(hPen);
                 }
             }
-            SelectObject(hdc, hOld);
         }
         return 0;
     }
@@ -165,7 +164,7 @@ void PromptStatusBarDialog(HWND owner) {
     static const wchar_t* kClass = L"TTStatusBarSettingClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 };
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = StatusBarSettingProc;
         wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass;
@@ -242,95 +241,105 @@ std::wstring ExpandStatusVariables(const std::wstring& format) {
 
 void CreateMainMenu(HWND hwnd)
 {
-    HMENU hMenuBar = CreateMenu();
-    HMENU hMenuFile = CreatePopupMenu();
-    HMENU hMenuEdit = CreatePopupMenu();
-    HMENU hMenuView = CreatePopupMenu();
-    HMENU hMenuOptions = CreatePopupMenu();
-    HMENU hMenuHelp = CreatePopupMenu();
+    (void)hwnd;
+    if (!g_app)
+        return;
 
-    HMENU hMenuPast = CreatePopupMenu();
-    HMENU hMenuCur = CreatePopupMenu();
-    HMENU hMenuCapture = CreatePopupMenu();
-    HMENU hMenuTail = CreatePopupMenu();
+    UniqueMenu hMenuBar(CreateMenu());
+    UniqueMenu hMenuFile(CreatePopupMenu());
+    UniqueMenu hMenuEdit(CreatePopupMenu());
+    UniqueMenu hMenuView(CreatePopupMenu());
+    UniqueMenu hMenuOptions(CreatePopupMenu());
+    UniqueMenu hMenuHelp(CreatePopupMenu());
+
+    UniqueMenu hMenuPast(CreatePopupMenu());
+    UniqueMenu hMenuCur(CreatePopupMenu());
+    UniqueMenu hMenuCapture(CreatePopupMenu());
+    UniqueMenu hMenuTail(CreatePopupMenu());
+
+    if (!hMenuBar.IsValid() || !hMenuFile.IsValid() || !hMenuEdit.IsValid() ||
+        !hMenuView.IsValid() || !hMenuOptions.IsValid() || !hMenuHelp.IsValid() ||
+        !hMenuPast.IsValid() || !hMenuCur.IsValid() || !hMenuCapture.IsValid() ||
+        !hMenuTail.IsValid())
+        return;
 
     auto AddODItem = [](HMENU hMenu, UINT_PTR id, const wchar_t* text)
         {
             AppendMenuW(hMenu, MF_STRING, id, text);
         };
 
-    auto AddODPopup = [](HMENU hMenu, HMENU hPopup, const wchar_t* text)
+    auto AddODPopup = [](HMENU hMenu, UniqueMenu& hPopup, const wchar_t* text)
         {
-            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPopup, text);
+            if (AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPopup.Get(), text))
+                hPopup.Release();
         };
 
-    AddODItem(hMenuFile, ID_MENU_FILE_NEW_WINDOW, L"새 창 띄우기");
-    AddODItem(hMenuFile, ID_MENU_FILE_QUICK_CONNECT, L"빠른 연결...\tAlt+Q");
-    AddODItem(hMenuFile, ID_MENU_FILE_ADDRESSBOOK, L"주소록...(&A)\tAlt+A");
-    AddODItem(hMenuFile, ID_MENU_FILE_ZAP, L"연결 끊기(#ZAP)\tCtrl+F9");
-    AddODItem(hMenuFile, ID_MENU_FILE_READ_SCRIPT, L"스크립트 읽기...(&S)");
-    AddODItem(hMenuFile, ID_MENU_EDIT_MEMO, L"메모장...\tAlt+V");
-    AppendMenuW(hMenuFile, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hMenuFile, ID_MENU_EXIT, L"끝내기\tAlt+X");
+    AddODItem(hMenuFile.Get(), ID_MENU_FILE_NEW_WINDOW, L"새 창 띄우기");
+    AddODItem(hMenuFile.Get(), ID_MENU_FILE_QUICK_CONNECT, L"빠른 연결...\tAlt+Q");
+    AddODItem(hMenuFile.Get(), ID_MENU_FILE_ADDRESSBOOK, L"주소록...(&A)\tAlt+A");
+    AddODItem(hMenuFile.Get(), ID_MENU_FILE_ZAP, L"연결 끊기(#ZAP)\tCtrl+F9");
+    AddODItem(hMenuFile.Get(), ID_MENU_FILE_READ_SCRIPT, L"스크립트 읽기...(&S)");
+    AddODItem(hMenuFile.Get(), ID_MENU_EDIT_MEMO, L"메모장...\tAlt+V");
+    AppendMenuW(hMenuFile.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hMenuFile.Get(), ID_MENU_EXIT, L"끝내기\tAlt+X");
 
-    AddODItem(hMenuPast, ID_MENU_EDIT_COPY_PAST, L"클립보드로 복사");
-    AddODItem(hMenuPast, ID_MENU_EDIT_SAVE_PAST, L"파일로 저장...");
+    AddODItem(hMenuPast.Get(), ID_MENU_EDIT_COPY_PAST, L"클립보드로 복사");
+    AddODItem(hMenuPast.Get(), ID_MENU_EDIT_SAVE_PAST, L"파일로 저장...");
 
-    AddODItem(hMenuCur, ID_MENU_EDIT_COPY_CUR, L"클립보드로 복사");
-    AddODItem(hMenuCur, ID_MENU_EDIT_SAVE_CUR, L"파일로 저장...");
+    AddODItem(hMenuCur.Get(), ID_MENU_EDIT_COPY_CUR, L"클립보드로 복사");
+    AddODItem(hMenuCur.Get(), ID_MENU_EDIT_SAVE_CUR, L"파일로 저장...");
 
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_ALL, L"전체");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_CHAT, L"잡담");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_AUCTION, L"경매");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_TALK, L"대화");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_ITEM, L"아이템 획득");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_EXP, L"경험치");
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER1, GetTailModeMenuTitle(7).c_str());
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER2, GetTailModeMenuTitle(8).c_str());
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_USER3, GetTailModeMenuTitle(9).c_str());
-    AddODItem(hMenuTail, ID_MENU_CAPTURE_TAIL_CUSTOM, L"임시 문자열...");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_ALL, L"전체");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_CHAT, L"잡담");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_AUCTION, L"경매");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_TALK, L"대화");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_ITEM, L"아이템 획득");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_EXP, L"경험치");
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_USER1, GetTailModeMenuTitle(7).c_str());
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_USER2, GetTailModeMenuTitle(8).c_str());
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_USER3, GetTailModeMenuTitle(9).c_str());
+    AddODItem(hMenuTail.Get(), ID_MENU_CAPTURE_TAIL_CUSTOM, L"임시 문자열...");
 
-    // 갈무리 메뉴는 저장 켜기/끄기와 폴더 열기만 둡니다.
-    // 보기 창과 필터 설정은 보기 메뉴의 상위 항목으로 분리합니다.
-    AddODItem(hMenuCapture, ID_MENU_CAPTURE_TOGGLE, L"갈무리 꺼짐");
+    AddODItem(hMenuCapture.Get(), ID_MENU_CAPTURE_TOGGLE, L"갈무리 꺼짐");
     if (HasCaptureTailWindows())
-        AddODItem(hMenuCapture, ID_MENU_CAPTURE_CLOSE_ALL, L"갈무리창 모두 닫기");
-    AddODItem(hMenuCapture, ID_MENU_CAPTURE_OPEN_FOLDER, L"갈무리 폴더 열기");
+        AddODItem(hMenuCapture.Get(), ID_MENU_CAPTURE_CLOSE_ALL, L"갈무리창 모두 닫기");
+    AddODItem(hMenuCapture.Get(), ID_MENU_CAPTURE_OPEN_FOLDER, L"갈무리 폴더 열기");
 
-    AddODItem(hMenuEdit, ID_MENU_FIND_DIALOG, L"찾기...\tCtrl+F");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_VARIABLE, L"변수 설정(&V)...");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_ABBREVIATION, L"줄임말 설정(&B)...");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_FUNCTION_SHORTCUT, L"단축키 설정(&K)...");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_TIMER, L"타이머 설정(&T)...");
-    AddODItem(hMenuEdit, ID_EDIT_STATUSBAR, L"상태바 설정(&S)...");
-    AddODItem(hMenuEdit, ID_MENU_EDIT_NUMPAD, L"숫자 키패드 매크로...(&N)");
-    AppendMenuW(hMenuEdit, MF_SEPARATOR, 0, nullptr);
-    AddODPopup(hMenuEdit, hMenuPast, L"지난 화면을");
-    AddODPopup(hMenuEdit, hMenuCur, L"현재 화면을");
+    AddODItem(hMenuEdit.Get(), ID_MENU_FIND_DIALOG, L"찾기...\tCtrl+F");
+    AddODItem(hMenuEdit.Get(), ID_MENU_EDIT_VARIABLE, L"변수 설정(&V)...");
+    AddODItem(hMenuEdit.Get(), ID_MENU_EDIT_ABBREVIATION, L"줄임말 설정(&B)...");
+    AddODItem(hMenuEdit.Get(), ID_MENU_EDIT_FUNCTION_SHORTCUT, L"단축키 설정(&K)...");
+    AddODItem(hMenuEdit.Get(), ID_MENU_EDIT_TIMER, L"타이머 설정(&T)...");
+    AddODItem(hMenuEdit.Get(), ID_EDIT_STATUSBAR, L"상태바 설정(&S)...");
+    AddODItem(hMenuEdit.Get(), ID_MENU_EDIT_NUMPAD, L"숫자 키패드 매크로...(&N)");
+    AppendMenuW(hMenuEdit.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODPopup(hMenuEdit.Get(), hMenuPast, L"지난 화면을");
+    AddODPopup(hMenuEdit.Get(), hMenuCur, L"현재 화면을");
 
-    AddODItem(hMenuView, ID_MENU_VIEW_HIDE_MENU, L"메뉴 숨기기(&M)");
-    AddODPopup(hMenuView, hMenuCapture, L"갈무리(&L)");
-    AddODPopup(hMenuView, hMenuTail, L"갈무리 보기(&G)");
-    AddODItem(hMenuView, ID_MENU_CAPTURE_FILTER_SETTINGS, L"갈무리 필터 설정...");
-    AddODItem(hMenuView, ID_MENU_THEME_DIALOG, L"ANSI 테마 선택...(&T)");
-    AddODItem(hMenuView, ID_MENU_OPTIONS_FIT_WINDOW, L"화면 여백 없애기(&S)");
-    AppendMenuW(hMenuView, MF_SEPARATOR, 0, nullptr);
-    AddODItem(hMenuView, ID_MENU_VIEW_SYMBOLS, L"특수 기호...(&S)\tF4");
+    AddODItem(hMenuView.Get(), ID_MENU_VIEW_HIDE_MENU, L"메뉴 숨기기(&M)");
+    AddODPopup(hMenuView.Get(), hMenuCapture, L"갈무리(&L)");
+    AddODPopup(hMenuView.Get(), hMenuTail, L"갈무리 보기(&G)");
+    AddODItem(hMenuView.Get(), ID_MENU_CAPTURE_FILTER_SETTINGS, L"갈무리 필터 설정...");
+    AddODItem(hMenuView.Get(), ID_MENU_THEME_DIALOG, L"ANSI 테마 선택...(&T)");
+    AddODItem(hMenuView.Get(), ID_MENU_OPTIONS_FIT_WINDOW, L"화면 여백 없애기(&S)");
+    AppendMenuW(hMenuView.Get(), MF_SEPARATOR, 0, nullptr);
+    AddODItem(hMenuView.Get(), ID_MENU_VIEW_SYMBOLS, L"특수 기호...(&S)\tF4");
 
-    AddODItem(hMenuOptions, ID_MENU_SETTINGS, L"환경 설정...(&O)");
-    AddODItem(hMenuOptions, ID_MENU_OPTIONS_SHORTCUTBAR, L"단축버튼 표시(&H)");
-    AddODItem(hMenuOptions, ID_MENU_OPTIONS_KEEPALIVE_TOGGLE, L"접속 유지 켜기(&K)");
+    AddODItem(hMenuOptions.Get(), ID_MENU_SETTINGS, L"환경 설정...(&O)");
+    AddODItem(hMenuOptions.Get(), ID_MENU_OPTIONS_SHORTCUTBAR, L"단축버튼 표시(&H)");
+    AddODItem(hMenuOptions.Get(), ID_MENU_OPTIONS_KEEPALIVE_TOGGLE, L"접속 유지 켜기(&K)");
 
-    AddODItem(hMenuHelp, ID_MENU_HELP_SHORTCUT, L"단축키 도움말(&S)");
-    AddODItem(hMenuHelp, ID_MENU_HELP_ABOUT, L"정보(&A)");
+    AddODItem(hMenuHelp.Get(), ID_MENU_HELP_SHORTCUT, L"단축키 도움말(&S)");
+    AddODItem(hMenuHelp.Get(), ID_MENU_HELP_ABOUT, L"정보(&A)");
 
-    AddODPopup(hMenuBar, hMenuFile, L"파일(&F)");
-    AddODPopup(hMenuBar, hMenuEdit, L"편집(&E)");
-    AddODPopup(hMenuBar, hMenuView, L"보기(&V)");
-    AddODPopup(hMenuBar, hMenuOptions, L"옵션(&O)");
-    AddODPopup(hMenuBar, hMenuHelp, L"도움말(&H)");
+    AddODPopup(hMenuBar.Get(), hMenuFile, L"파일(&F)");
+    AddODPopup(hMenuBar.Get(), hMenuEdit, L"편집(&E)");
+    AddODPopup(hMenuBar.Get(), hMenuView, L"보기(&V)");
+    AddODPopup(hMenuBar.Get(), hMenuOptions, L"옵션(&O)");
+    AddODPopup(hMenuBar.Get(), hMenuHelp, L"도움말(&H)");
 
-    g_app->hMainMenu = hMenuBar;
+    ResetMenuRef(g_app->hMainMenu);
+    g_app->hMainMenu = hMenuBar.Release();
 }
 
 void ShowCustomMenuPopup(HWND hwnd, int menuIndex)
@@ -356,7 +365,6 @@ void ShowCustomMenuPopup(HWND hwnd, int menuIndex)
 
     g_app->hotMenuIndex = menuIndex;
     InvalidateRect(hwnd, nullptr, FALSE);
-    UpdateWindow(hwnd);
 
     SetForegroundWindow(hwnd);
 
@@ -373,5 +381,4 @@ void ShowCustomMenuPopup(HWND hwnd, int menuIndex)
 
     g_app->hotMenuIndex = -1;
     InvalidateRect(hwnd, nullptr, FALSE);
-    UpdateWindow(hwnd);
 }

@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 #include <windows.h>
+#include "types.h"
 #include <vector>
 #include <string>
 

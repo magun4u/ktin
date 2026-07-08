@@ -4,7 +4,9 @@
 #include "utils.h"
 #include "timer.h"
 #include "settings.h"
+#include "win_util.h"
 #include <commctrl.h>
+#include <algorithm>
 
 // ==============================================
 // 1. 설정 로드 및 저장 (INI)
@@ -15,7 +17,9 @@ void LoadTimerSettings()
     g_app->timers.clear();
 
     std::wstring path = GetSettingsPath();
+    constexpr int kMaxTimerItems = 512;
     int count = GetPrivateProfileIntW(L"Timer", L"Count", 0, path.c_str());
+    count = ClampInt(count, 0, kMaxTimerItems);
 
     for (int i = 0; i < count; ++i)
     {
@@ -30,10 +34,10 @@ void LoadTimerSettings()
         t.repeat = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_Repeat").c_str(), 0, path.c_str()) != 0;
         t.autoStart = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_AutoStart").c_str(), 0, path.c_str()) != 0;
 
-        t.hour = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_H").c_str(), 0, path.c_str());
-        t.minute = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_M").c_str(), 0, path.c_str());
-        t.second = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_S").c_str(), 0, path.c_str());
-        t.millisecond = GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_Ms").c_str(), 0, path.c_str());
+        t.hour = ClampInt(GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_H").c_str(), 0, path.c_str()), 0, 999);
+        t.minute = ClampInt(GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_M").c_str(), 0, path.c_str()), 0, 59);
+        t.second = ClampInt(GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_S").c_str(), 0, path.c_str()), 0, 59);
+        t.millisecond = ClampInt(GetPrivateProfileIntW(L"Timer", (std::wstring(sec) + L"_Ms").c_str(), 0, path.c_str()), 0, 999);
 
         GetPrivateProfileStringW(L"Timer", (std::wstring(sec) + L"_Cmd").c_str(), L"", buf, 1024, path.c_str()); t.command = buf;
 
@@ -207,6 +211,7 @@ bool InterceptTimerCommand(const std::wstring& inputCmd)
             std::wstring action = cmd.substr(secondOpen + 1, secondClose - secondOpen - 1);
 
             bool isGroup = (cmd.find(L"#TIMERGROUP ") == 0);
+            bool handled = false;
 
             for (auto& t : g_app->timers)
             {
@@ -214,22 +219,23 @@ bool InterceptTimerCommand(const std::wstring& inputCmd)
                 if (isGroup) match = (_wcsicmp(t.groupPath.c_str(), targetName.c_str()) == 0);
                 else         match = (_wcsicmp(t.name.c_str(), targetName.c_str()) == 0);
 
-                if (match)
-                {
-                    if (action == L"START") StartTimerItem(t);
-                    else if (action == L"STOP") StopTimerItem(t);
-                    else if (action == L"PAUSE") PauseTimerItem(t);
-                    else if (action == L"RESUME") ResumeTimerItem(t);
-                    else if (action == L"RESTART" || action == L"RESET") ResetTimerItem(t);
-                    else if (action == L"ON") t.enabled = true;
-                    else if (action == L"OFF") { t.enabled = false; StopTimerItem(t); }
-                    else if (action == L"TOGGLE") {
-                        t.enabled = !t.enabled;
-                        if (t.enabled) StartTimerItem(t); else StopTimerItem(t);
-                    }
+                if (!match)
+                    continue;
+
+                if (action == L"START") { StartTimerItem(t); handled = true; }
+                else if (action == L"STOP") { StopTimerItem(t); handled = true; }
+                else if (action == L"PAUSE") { PauseTimerItem(t); handled = true; }
+                else if (action == L"RESUME") { ResumeTimerItem(t); handled = true; }
+                else if (action == L"RESTART" || action == L"RESET") { ResetTimerItem(t); handled = true; }
+                else if (action == L"ON") { t.enabled = true; handled = true; }
+                else if (action == L"OFF") { t.enabled = false; StopTimerItem(t); handled = true; }
+                else if (action == L"TOGGLE") {
+                    t.enabled = !t.enabled;
+                    if (t.enabled) StartTimerItem(t); else StopTimerItem(t);
+                    handled = true;
                 }
             }
-            return true; // 엔진에서 처리했으므로 서버로 전송 안 함
+            return handled; // 실제로 처리한 내부 타이머 명령만 서버 전송을 막음
         }
     }
     return false;
@@ -292,7 +298,6 @@ static void SyncTimerDataFromUI(HWND hwnd, int idx)
     GetWindowTextW(GetDlgItem(hwnd, ID_TIMER_EDIT_NAME), buf, 1024); t.name = buf;
     GetWindowTextW(GetDlgItem(hwnd, ID_TIMER_EDIT_GROUP), buf, 1024); t.groupPath = buf;
 
-    bool wasEnabled = t.enabled;
     t.enabled = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_ENABLE), BM_GETCHECK, 0, 0) == BST_CHECKED);
     t.repeat = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_REPEAT), BM_GETCHECK, 0, 0) == BST_CHECKED);
     t.autoStart = (SendMessageW(GetDlgItem(hwnd, ID_TIMER_CHK_AUTOSTART), BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -529,13 +534,12 @@ static LRESULT CALLBACK TimerDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             COLORREF fg = (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetSysColor(COLOR_WINDOWTEXT);
             COLORREF prefixColor = isOn ? RGB(0, 160, 0) : RGB(200, 40, 40);
 
-            HBRUSH hbr = CreateSolidBrush(bg);
-            FillRect(dis->hDC, &dis->rcItem, hbr);
-            DeleteObject(hbr);
+            if (!FillSolidRect(dis->hDC, dis->rcItem, bg))
+                FillRect(dis->hDC, &dis->rcItem, GetSysColorBrush(COLOR_WINDOW));
             SetBkMode(dis->hDC, TRANSPARENT);
 
             HFONT hFont = GetPopupUIFont(hwnd);
-            HFONT hOld = (HFONT)SelectObject(dis->hDC, hFont);
+            ScopedSelectObject selectedFont(dis->hDC, hFont);
 
             RECT rcPrefix = dis->rcItem; rcPrefix.left += 4; rcPrefix.right = rcPrefix.left + 36;
             RECT rcText = dis->rcItem; rcText.left += 40;
@@ -546,7 +550,6 @@ static LRESULT CALLBACK TimerDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             SetTextColor(dis->hDC, fg);
             DrawTextW(dis->hDC, text + 4, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
-            SelectObject(dis->hDC, hOld);
             if (dis->itemState & ODS_FOCUS) DrawFocusRect(dis->hDC, &dis->rcItem);
             return TRUE;
         }
@@ -567,7 +570,7 @@ void PromptTimerDialog(HWND owner)
     const wchar_t kClass[] = L"TTGuiTimerPopupClass";
     static bool reg = false;
     if (!reg) {
-        WNDCLASSW wc = { 0 }; wc.lpfnWndProc = TimerDialogProc; wc.hInstance = GetModuleHandle(0);
+        WNDCLASSW wc = {}; wc.lpfnWndProc = TimerDialogProc; wc.hInstance = GetModuleHandle(0);
         wc.lpszClassName = kClass; wc.hCursor = LoadCursor(0, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;
     }

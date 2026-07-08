@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <windows.h>
+#include "types.h"
 #include <vector>
 #include <string>
 
@@ -27,5 +28,7 @@ void FlushCaptureLogBuffer();
 void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs);
 void WriteRawAnsiBytesToCaptureLog(const char* data, size_t len);
 void WriteToChatLog(const std::wstring& text);
+void CloseChatLog();
 
 LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK ChatEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

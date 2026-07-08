@@ -30,7 +30,7 @@ struct KeepAliveDialogState
 // 함수 선언 (public)
 std::wstring GetSettingsPath();
 
-static void UpdateSettingPreviews(HWND hwnd);
+void UpdateSettingPreviews(HWND hwnd);
 
 void ShowSettingsDialog(HWND owner);
 void SaveWindowSettings(HWND hwnd);

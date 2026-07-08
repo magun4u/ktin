@@ -1,9 +1,9 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
+#include "win_util.h"
 #include "terminal_buffer.h"
-#include "help_dialog.h"
 #include "theme.h"
 #include "resource.h"
 #include "settings.h"
@@ -145,7 +145,7 @@ static LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     {
         RECT rc = { 0, 0, 920, 640 };
         AdjustWindowRectEx(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, WS_EX_DLGMODALFRAME);
-        SetWindowPos(hwnd, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
+        SetWindowPos(hwnd, nullptr, 0, 0, RectWidth(rc), RectHeight(rc), SWP_NOMOVE | SWP_NOZORDER);
 
         ApplyPopupTitleBarTheme(hwnd);
         hbrBack = CreateSolidBrush(RGB(32, 34, 37));
@@ -341,11 +341,11 @@ static LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 
     case WM_DESTROY:
     {
-        if (hFontTitle) { DeleteObject(hFontTitle); hFontTitle = nullptr; }
-        if (hFontSub) { DeleteObject(hFontSub); hFontSub = nullptr; }
-        if (hFontUi) { DeleteObject(hFontUi); hFontUi = nullptr; }
-        if (hbrBack) { DeleteObject(hbrBack); hbrBack = nullptr; }
-        if (hbrPanel) { DeleteObject(hbrPanel); hbrPanel = nullptr; }
+        ResetGdiObjectRef(hFontTitle);
+        ResetGdiObjectRef(hFontSub);
+        ResetGdiObjectRef(hFontUi);
+        ResetGdiObjectRef(hbrBack);
+        ResetGdiObjectRef(hbrPanel);
         return 0;
     }
     }
@@ -377,7 +377,7 @@ void ShowShortcutHelp(HWND owner)
     int h = 640;
 
     // 부모 창(메인 프로그램)의 위치와 크기 가져오기
-    RECT rcOwner = { 0 };
+    RECT rcOwner = {};
     if (owner && IsWindow(owner)) {
         GetWindowRect(owner, &rcOwner);
     }

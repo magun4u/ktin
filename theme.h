@@ -51,11 +51,11 @@ public:
 
     AnsiToRunsParser();
     void SyncTheme();
-    std::vector<StyledRun> Feed(const char* data, size_t len);
-    std::vector<StyledRun> Flush();
+    bool Feed(const char* data, size_t len);
+    bool Flush();
 
 private:
-    enum class State { Normal, Esc, Csi, Osc, OscEsc };
+    enum class State { Normal, Esc, Csi, CsiDiscard, Osc, OscEsc, OscDiscard, OscDiscardEsc };
     TextStyle style_{};
     State state_ = State::Normal;
     std::string textBytes_;
@@ -64,7 +64,7 @@ private:
     std::string oscParams_;
 
     Utf8Decoder decoder_;
-    std::vector<StyledRun> output_;
+    bool dirty_ = false;
 
     int fgBaseIndex = -1;
     int bgBaseIndex = -1;
@@ -74,9 +74,8 @@ private:
     static COLORREF ColorFromAnsiIndex(int idx, bool bright, bool forBackground);
     static COLORREF ColorFrom256(int idx, bool forBackground);
     void FlushText();
-    void AppendRun(std::wstring text);
+    void AppendRun(const std::wstring& text);
     void HandleSgr();
     void HandleOsc();
     void Consume(char ch);
-    std::vector<StyledRun> TakeOutput();
 };

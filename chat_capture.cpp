@@ -1,4 +1,4 @@
-﻿#include "constants.h"
+#include "constants.h"
 #include "types.h"
 #include "main.h"
 #include "utils.h"
@@ -6,13 +6,16 @@
 #include "chat_capture.h"
 #include "resource.h"
 #include "settings.h"
+#include "async_file_writer.h"
+#include "win_util.h"
 #include <regex>
 #include <shellapi.h>
 #include <mutex>
 
-static std::string g_capturePendingUtf8;
-static DWORD g_captureLastFlushTick = 0;
-static std::mutex g_captureLogMutex;
+static AsyncFileWriter g_captureLogWriter;
+static AsyncFileWriter g_chatLogWriter;
+static std::mutex g_logWriterMutex;
+static std::wstring g_chatLogPath;
 
 ChatCaptureItem g_chatCaptures[10];
 
@@ -185,87 +188,41 @@ void StartCaptureLog()
         filePath += L'\\';
     filePath += MakeCaptureLogTimestamp() + L".txt";
 
-    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-
-    if (hFile != INVALID_HANDLE_VALUE)
+    if (g_captureLogWriter.Open(filePath, false, false))
     {
-        g_app->hCaptureLogFile = hFile;
+        g_app->captureLogOpen = true;
         g_app->captureLogPath = filePath;
     }
 }
 
 void FlushCaptureLogBuffer()
 {
-    if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE)
+    if (!g_app || !g_app->captureLogOpen)
         return;
-
-    std::lock_guard<std::mutex> lock(g_captureLogMutex);
-
-    if (g_capturePendingUtf8.empty())
-        return;
-
-    DWORD written = 0;
-    WriteFile(
-        g_app->hCaptureLogFile,
-        g_capturePendingUtf8.data(),
-        (DWORD)g_capturePendingUtf8.size(),
-        &written,
-        nullptr);
-
-    g_capturePendingUtf8.clear();
-    g_captureLastFlushTick = GetTickCount();
+    g_captureLogWriter.Flush();
 }
 
 void StopCaptureLog()
 {
     if (!g_app) return;
 
-    if (g_app->hCaptureLogFile != INVALID_HANDLE_VALUE)
-    {
-        FlushCaptureLogBuffer();
+    if (g_app->captureLogOpen)
+        g_captureLogWriter.Close();
 
-        CloseHandle(g_app->hCaptureLogFile);
-        g_app->hCaptureLogFile = INVALID_HANDLE_VALUE;
-    }
-
+    g_app->captureLogOpen = false;
     g_app->captureLogPath.clear();
 }
 
-
 void WriteRawAnsiBytesToCaptureLog(const char* data, size_t len)
 {
-    if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE || !data || len == 0)
+    if (!g_app || !g_app->captureLogOpen || !data || len == 0)
         return;
-
-    std::lock_guard<std::mutex> lock(g_captureLogMutex);
-    g_capturePendingUtf8.append(data, data + len);
-
-    const size_t kFlushSize = 32 * 1024;
-    const DWORD kFlushMs = 500;
-    DWORD now = GetTickCount();
-    bool needFlush = false;
-
-    if (g_capturePendingUtf8.size() >= kFlushSize)
-        needFlush = true;
-    if (g_captureLastFlushTick == 0)
-        g_captureLastFlushTick = now;
-    if (now - g_captureLastFlushTick >= kFlushMs)
-        needFlush = true;
-
-    if (!needFlush)
-        return;
-
-    DWORD written = 0;
-    WriteFile(g_app->hCaptureLogFile, g_capturePendingUtf8.data(),
-        (DWORD)g_capturePendingUtf8.size(), &written, nullptr);
-    g_capturePendingUtf8.clear();
-    g_captureLastFlushTick = now;
+    g_captureLogWriter.Write(data, len);
 }
 
 void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs)
 {
-    if (!g_app || g_app->hCaptureLogFile == INVALID_HANDLE_VALUE)
+    if (!g_app || !g_app->captureLogOpen)
         return;
 
     std::wstring merged;
@@ -278,72 +235,66 @@ void WriteRunsToCaptureLog(const std::vector<StyledRun>& runs)
     NormalizeRunTextForRichEdit(merged);
 
     std::string utf8 = WideToUtf8(merged);
-    if (utf8.empty())
-        return;
+    if (!utf8.empty())
+        g_captureLogWriter.Write(utf8);
+}
 
-    std::lock_guard<std::mutex> lock(g_captureLogMutex);
-    g_capturePendingUtf8 += utf8;
+static std::wstring BuildDailyChatLogPath()
+{
+    std::wstring logDir = MakeAbsolutePath(GetModuleDirectory(), L"chat");
+    CreateDirectoryW(logDir.c_str(), nullptr);
 
-    const size_t kFlushSize = 32 * 1024;
-    const DWORD kFlushMs = 500;
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
 
-    DWORD now = GetTickCount();
-    bool needFlush = false;
+    wchar_t dayName[32] = {};
+    wsprintfW(dayName, L"%04d%02d%02d.txt", st.wYear, st.wMonth, st.wDay);
 
-    if (g_capturePendingUtf8.size() >= kFlushSize)
-        needFlush = true;
+    if (!logDir.empty() && logDir.back() != L'\\')
+        logDir += L'\\';
+    return logDir + dayName;
+}
 
-    if (g_captureLastFlushTick == 0)
-        g_captureLastFlushTick = now;
+static bool EnsureChatLogWriterLocked(const std::wstring& path)
+{
+    if (path.empty())
+        return false;
 
-    if (now - g_captureLastFlushTick >= kFlushMs)
-        needFlush = true;
+    if (g_chatLogWriter.IsOpen() && g_chatLogPath == path)
+        return true;
 
-    if (!needFlush)
-        return;
+    g_chatLogWriter.Close();
+    g_chatLogPath.clear();
 
-    DWORD written = 0;
-    WriteFile(
-        g_app->hCaptureLogFile,
-        g_capturePendingUtf8.data(),
-        (DWORD)g_capturePendingUtf8.size(),
-        &written,
-        nullptr);
+    if (!g_chatLogWriter.Open(path, true, true))
+        return false;
 
-    g_capturePendingUtf8.clear();
-    g_captureLastFlushTick = now;
+    g_chatLogPath = path;
+    return true;
+}
+
+void CloseChatLog()
+{
+    std::lock_guard<std::mutex> lock(g_logWriterMutex);
+    g_chatLogWriter.Close();
+    g_chatLogPath.clear();
 }
 
 void WriteToChatLog(const std::wstring& text)
 {
-    if (!g_app) return;
+    if (!g_app || text.empty())
+        return;
 
-    std::wstring logDir = MakeAbsolutePath(GetModuleDirectory(), L"chat");
-    CreateDirectoryW(logDir.c_str(), nullptr);
+    std::string utf8 = WideToUtf8(text + L"\r\n");
+    if (utf8.empty())
+        return;
 
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    wchar_t fileName[MAX_PATH];
-    wsprintfW(fileName, L"%s\\%04d%02d%02d.txt",
-        logDir.c_str(), st.wYear, st.wMonth, st.wDay);
+    std::lock_guard<std::mutex> lock(g_logWriterMutex);
+    const std::wstring path = BuildDailyChatLogPath();
+    if (!EnsureChatLogWriterLocked(path))
+        return;
 
-    HANDLE hFile = CreateFileW(fileName, FILE_APPEND_DATA, FILE_SHARE_READ,
-        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-
-    if (hFile != INVALID_HANDLE_VALUE)
-    {
-        if (GetFileSize(hFile, nullptr) == 0)
-        {
-            unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-            DWORD written;
-            WriteFile(hFile, bom, 3, &written, nullptr);
-        }
-
-        std::string utf8 = WideToUtf8(text + L"\r\n");
-        DWORD written;
-        WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, nullptr);
-        CloseHandle(hFile);
-    }
+    g_chatLogWriter.Write(utf8);
 }
 
 // ==============================================
@@ -371,4 +322,79 @@ LRESULT CALLBACK ChatFloatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// ==============================================
+// 채팅 입력창 서브클래스 프로시저
+// ==============================================
+LRESULT CALLBACK ChatEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_RBUTTONUP:
+    {
+        // [핵심 로직] RichEdit은 원본 WM_RBUTTONUP 내부에서 기본 메뉴를 띄워버리는 경우가 많습니다.
+        // 원본으로 메시지가 넘어가지 않도록 차단(return 0)하고, 우리가 직접 WM_CONTEXTMENU를 호출합니다.
+        POINT pt;
+        GetCursorPos(&pt);
+        SendMessageW(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(pt.x, pt.y));
+        return 0;
+    }
+
+    case WM_CONTEXTMENU:
+    {
+        UniqueMenu hMenu(CreatePopupMenu());
+        if (hMenu.IsValid())
+        {
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_CUT, L"잘라내기(&T)\tCtrl+X");
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_COPY, L"복사하기(&C)\tCtrl+C");
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_PASTE, L"붙여넣기(&P)\tCtrl+V");
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_DELETE, L"삭제(&D)\tDel");
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_DELETE_LINE, L"행 삭제");
+            AppendMenuW(hMenu.Get(), MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_SELECT_ALL, L"모두 선택(&A)\tCtrl+A");
+            AppendMenuW(hMenu.Get(), MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu.Get(), MF_STRING, ID_CHAT_CLEAR_ALL, L"내용 지우기 (히스토리 포함)");
+
+            int xPos = (short)LOWORD(lParam);
+            int yPos = (short)HIWORD(lParam);
+
+            if (xPos == -1 && yPos == -1) // 키보드 메뉴 키 대응
+            {
+                POINT pt;
+                GetCursorPos(&pt);
+                xPos = pt.x;
+                yPos = pt.y;
+            }
+
+            SetForegroundWindow(g_app && g_app->hwndMain ? g_app->hwndMain : hwnd);
+            int cmd = TrackPopupMenu(hMenu.Get(), TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN, xPos, yPos, 0, hwnd, nullptr);
+
+            switch (cmd)
+            {
+            case ID_CHAT_CUT:         SendMessageW(hwnd, WM_CUT, 0, 0); break;
+            case ID_CHAT_COPY:        SendMessageW(hwnd, WM_COPY, 0, 0); break;
+            case ID_CHAT_PASTE:       SendMessageW(hwnd, WM_PASTE, 0, 0); break;
+            case ID_CHAT_DELETE:      SendMessageW(hwnd, WM_CLEAR, 0, 0); break;
+            case ID_CHAT_DELETE_LINE: SendMessageW(hwnd, EM_REPLACESEL, FALSE, (LPARAM)L""); break;
+            case ID_CHAT_SELECT_ALL:  SendMessageW(hwnd, EM_SETSEL, 0, -1); break;
+            case ID_CHAT_CLEAR_ALL:
+                if (g_app)
+                {
+                    SetWindowTextW(hwnd, L"");
+                    g_app->history.clear();
+                    g_app->displayedHistoryIndex[0] = -1;
+                    g_app->displayedHistoryIndex[1] = -1;
+                    g_app->displayedHistoryIndex[2] = -1;
+                    SetInputViewLatest();
+                }
+                break;
+            }
+        }
+        return 0; // 처리 완료 후 0 반환
+    }
+    }
+
+    // WM_RBUTTONDOWN 등 나머지 모든 메시지는 원본 프로시저가 정상 처리 (우클릭 커서 이동 지원)
+    return CallWindowProcW(g_app->oldChatProc, hwnd, msg, wParam, lParam);
 }

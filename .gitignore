@@ -1,0 +1,59 @@
+# Object/resource outputs
+*.o
+*.obj
+*.d
+*.res
+*.aps
+
+# Executables/debug/linker outputs
+*.exe
+*.exe.manifest
+*.manifest
+*.pdb
+*.ilk
+*.idb
+*.ipdb
+*.iobj
+*.exp
+*.lib
+*.dll
+
+# Build version stamps
+.ktin_build_*.stamp
+
+# Build directories
+build/
+dist/
+out/
+bin/
+Debug/
+Release/
+x64/
+x86/
+Win32/
+.vs/
+
+# MSBuild/Visual Studio generated state
+*.tlog
+*.lastbuildstate
+*.user
+*.suo
+
+# Local runtime files
+config.ini
+sessions.ini
+log/
+logs/
+chat/
+
+# Editor/temp files
+.vscode/
+.idea/
+*.log
+*.tmp
+*.bak
+*.swp
+*.swn
+
+# Keep source-side manifest tracked.
+!ktin.exe.manifest
